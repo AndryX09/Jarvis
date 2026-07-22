@@ -1191,7 +1191,7 @@ def vault_status(root: Path, state: Path) -> dict[str, object]:
             audit_events = sum(1 for line in handle if line.strip())
     return {
         "service": "Jarvis Core",
-        "version": "1.3.3",
+        "version": "1.4.0",
         "vault_mode": "read-write-with-versioning",
         "session_mode": "multi-session-with-shared-mutation-lock",
         "concurrent_reads_available": True,

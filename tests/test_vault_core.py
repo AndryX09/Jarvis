@@ -254,7 +254,7 @@ class JarvisCoreTests(unittest.TestCase):
 
     def test_status_explicitly_reports_security_and_policy_capabilities(self):
         status = vault_status(self.root, self.state)
-        self.assertEqual(status["version"], "1.3.3")
+        self.assertEqual(status["version"], "1.4.0")
         self.assertEqual(
             status["session_mode"], "multi-session-with-shared-mutation-lock"
         )

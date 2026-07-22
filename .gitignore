@@ -1,0 +1,68 @@
+# jarvis-core — gitignore
+# Repository-wide safety net for vault artefacts, secrets, credentials, build
+# outputs and tool caches. Anything matching these patterns is ignored by git
+# and never enters the history.
+
+# --- Python --------------------------------------------------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.eggs/
+build/
+dist/
+.mypy_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# --- Editor / OS ---------------------------------------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Vault and Jarvis state (NEVER commit) ------------------------------
+vault-main/
+core-state-main-v1/
+backups-main/
+release-state/
+*.release-*/
+state/
+captures/
+versions/
+audit.jsonl
+audit.jsonl.*
+
+# --- Secrets and credentials (NEVER commit) ----------------------------
+.env
+.env.*
+*.pem
+*.key
+*.crt
+cert.pem
+credentials.json
+*tunnel*.json
+cloudflared-*.json
+secrets/
+.envrc
+
+# --- Build and test outputs ---------------------------------------------
+*.tar.gz
+*.zip
+SOURCE-SHA256SUMS.verified
+build-output/
+dist-output/
+.ruff_cache/
+.deploy/
+
+# --- Local logs ---------------------------------------------------------
+*.log
+logs/
+*.pid
