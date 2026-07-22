@@ -121,7 +121,8 @@ open a router port.
   audit tools return metadata, not raw contents.
 - Capture status changes require a current `record_sha256` and follow the enforced
   transition matrix described above.
-- The container has no network, no Linux capabilities, a read-only root filesystem,
+- The HTTP container uses Docker's bridge network but publishes its MCP port only on
+  `127.0.0.1`; it has no Linux capabilities, uses a read-only root filesystem, applies
   CPU/memory/process limits, and only the vault and state mounts are writable.
 - The launcher runs the container as the invoking Linux user so synchronized files
   retain the correct ownership.
@@ -154,5 +155,4 @@ The restricted launcher mounts:
 - the synchronized vault as `/vault`;
 - protected Jarvis state as `/state`.
 
-Keep the previous image and versioned launcher available throughout rollout. Jarvis Core
-1.3.3 is the rollback target for the 1.4.0 release.
+The existing stdio transport remains available alongside the HTTP transport.

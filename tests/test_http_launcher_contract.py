@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 class HttpLauncherContractTests(unittest.TestCase):
-    def test_http_launcher_is_loopback_only_and_uses_internal_network(self):
+    def test_http_launcher_is_loopback_only_and_uses_bridge_network(self):
         root = Path(__file__).resolve().parents[1]
         launcher = (
             root / "release" / "run-jarvis-http-main-v1.4.0.sh"
@@ -11,7 +11,9 @@ class HttpLauncherContractTests(unittest.TestCase):
 
         self.assertIn("IMAGE_ID_PLACEHOLDER", launcher)
         self.assertIn("docker network inspect", launcher)
-        self.assertIn('test "$network_internal" = "true"', launcher)
+        self.assertIn(
+            'network_name="${JARVIS_HTTP_DOCKER_NETWORK:-bridge}"', launcher
+        )
         self.assertIn('--publish "127.0.0.1:${host_port}:${container_port}"', launcher)
         self.assertIn("JARVIS_TRANSPORT=streamable-http", launcher)
         self.assertIn("JARVIS_HTTP_HOST=0.0.0.0", launcher)
@@ -22,6 +24,7 @@ class HttpLauncherContractTests(unittest.TestCase):
         self.assertIn("--security-opt no-new-privileges", launcher)
         self.assertNotIn("0.0.0.0:${host_port}", launcher)
         self.assertNotIn("--network none", launcher)
+        self.assertNotIn("jarvis-http-internal", launcher)
 
 
 if __name__ == "__main__":

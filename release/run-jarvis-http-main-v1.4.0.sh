@@ -7,7 +7,7 @@ fail() {
 }
 
 rollout_lock="${JARVIS_ROLLOUT_LOCK:-/home/satellite/jarvis/.jarvis-rollout.lock}"
-network_name="${JARVIS_HTTP_DOCKER_NETWORK:-jarvis-http-internal}"
+network_name="${JARVIS_HTTP_DOCKER_NETWORK:-bridge}"
 host_port="${JARVIS_HTTP_HOST_PORT:-8765}"
 container_port=8000
 allowed_hosts="${JARVIS_HTTP_ALLOWED_HOSTS:-127.0.0.1:*,localhost:*}"
@@ -22,10 +22,8 @@ then
 fi
 test -n "$allowed_hosts" || fail "JARVIS_HTTP_ALLOWED_HOSTS non può essere vuota"
 
-network_internal="$(
-  docker network inspect --format '{{.Internal}}' "$network_name" 2>/dev/null
-)" || fail "rete Docker $network_name assente"
-test "$network_internal" = "true" || fail "rete Docker $network_name non interna"
+docker network inspect "$network_name" >/dev/null 2>&1 \
+  || fail "rete Docker $network_name assente"
 
 exec 9>"$rollout_lock"
 if ! flock -s -n 9
