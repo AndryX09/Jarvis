@@ -1,4 +1,9 @@
+import os
+
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
+
+from runtime_config import load_runtime_config
 
 from vault_core import (
     JarvisError,
@@ -32,9 +37,10 @@ from vault_core import (
 
 VAULT_ROOT = get_vault_root()
 STATE_ROOT = get_state_root()
+RUNTIME_CONFIG = load_runtime_config(os.environ)
 
 mcp = FastMCP(
-    "Jarvis Core v1.3.3",
+    "Jarvis Core v1.4.0",
     instructions=(
         "Personal Obsidian vault tools. Read operations are unrestricted inside visible "
         "Markdown notes. Mutations never delete notes, never overwrite a destination, "
@@ -48,6 +54,13 @@ mcp = FastMCP(
         "transitions are enforced by the server and require a fresh record_sha256 plus a "
         "non-empty summary. Mark a ready capture processed only after all referenced "
         "Markdown output notes exist. Ambiguous unreviewed material stays pending."
+    ),
+    host=RUNTIME_CONFIG.host,
+    port=RUNTIME_CONFIG.port,
+    streamable_http_path=RUNTIME_CONFIG.streamable_http_path,
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=list(RUNTIME_CONFIG.allowed_hosts),
     ),
 )
 
@@ -269,4 +282,4 @@ def recent_activity(max_results: int = 20) -> dict[str, object]:
 
 
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    mcp.run(transport=RUNTIME_CONFIG.transport)

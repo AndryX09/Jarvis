@@ -4,7 +4,21 @@ from pathlib import Path
 
 
 class ServerContractTests(unittest.TestCase):
-    def test_server_exposes_v133_policy_contract_without_delete_tool(self):
+    def test_server_wires_validated_streamable_http_configuration(self):
+        server_path = Path(__file__).resolve().parents[1] / "app" / "server.py"
+        source = server_path.read_text(encoding="utf-8")
+
+        self.assertIn("load_runtime_config", source)
+        self.assertIn("TransportSecuritySettings", source)
+        self.assertIn("host=RUNTIME_CONFIG.host", source)
+        self.assertIn("port=RUNTIME_CONFIG.port", source)
+        self.assertIn(
+            "streamable_http_path=RUNTIME_CONFIG.streamable_http_path", source
+        )
+        self.assertIn("allowed_hosts=list(RUNTIME_CONFIG.allowed_hosts)", source)
+        self.assertIn("mcp.run(transport=RUNTIME_CONFIG.transport)", source)
+
+    def test_server_exposes_v140_policy_contract_without_delete_tool(self):
         server_path = Path(__file__).resolve().parents[1] / "app" / "server.py"
         source = server_path.read_text(encoding="utf-8")
         tree = ast.parse(source)
@@ -22,7 +36,7 @@ class ServerContractTests(unittest.TestCase):
                 ):
                     tool_names.append(node.name)
 
-        self.assertIn('"Jarvis Core v1.3.3"', source)
+        self.assertIn('"Jarvis Core v1.4.0"', source)
         self.assertEqual(len(tool_names), 23)
         self.assertIn("read_organization_policy", tool_names)
         self.assertIn("read_ingestion_policy", tool_names)

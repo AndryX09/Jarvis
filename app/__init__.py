@@ -1,1 +1,1 @@
-"""Jarvis Core v1.3.3 package."""
+"""Jarvis Core v1.4.0 package."""

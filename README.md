@@ -1,4 +1,4 @@
-# Jarvis Core v1.3.3
+# Jarvis Core v1.4.0
 
 Personal MCP server for a synchronized Obsidian vault.
 
@@ -76,13 +76,36 @@ summary, and follow the transition matrix above.
 For conversation and note organization, call `read_organization_policy`, search and
 read relevant notes, and follow its confirmation rules before using versioned note
 mutation tools. Jarvis Core validates revision hashes but cannot observe or enforce a
-word such as “confermo” in a client conversation.
+word such as "confermo" in a client conversation.
 
 Google Keep Takeout ZIP archives can be imported with `/app/import_keep.py`. The
 importer reads JSON directly without extracting the archive, preserves the original ZIP
 under `/state/imports/google-keep`, and converts note text, lists, labels, timestamps,
 and attachment references into captures. Use `--dry-run` first and `--limit 5` for an
 initial sample. Re-importing the same archive is deduplicated.
+
+## Streamable HTTP transport
+
+The default transport remains `stdio`, preserving the existing Smart Composer over SSH
+path. Set these variables to run the same 23-tool MCP contract over Streamable HTTP:
+
+```
+JARVIS_TRANSPORT=streamable-http
+JARVIS_HTTP_HOST=127.0.0.1
+JARVIS_HTTP_PORT=8765
+JARVIS_HTTP_ALLOWED_HOSTS=127.0.0.1:*,localhost:*
+```
+
+The MCP endpoint is then `http://127.0.0.1:8765/mcp`. The port must be between 1 and
+65535. Unknown transports and an empty HTTP host allowlist are rejected before startup.
+DNS rebinding protection is enabled by FastMCP. Add a reviewed public hostname to
+`JARVIS_HTTP_ALLOWED_HOSTS` only when a trusted reverse proxy is ready.
+
+TLS is deliberately not terminated by Jarvis. A reverse proxy such as Cloudflare may
+terminate public HTTPS and forward to this loopback HTTP origin. The `/mcp` endpoint
+contains write-capable tools and must never be exposed directly to the LAN or Internet
+without an approved authentication layer. Jarvis 1.4.0 does not change Cloudflare or
+open a router port.
 
 ## Safety contract
 
@@ -132,4 +155,4 @@ The restricted launcher mounts:
 - protected Jarvis state as `/state`.
 
 Keep the previous image and versioned launcher available throughout rollout. Jarvis Core
-1.3.2 is the rollback target for the 1.3.3 release.
+1.3.3 is the rollback target for the 1.4.0 release.
