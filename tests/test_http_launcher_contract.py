@@ -19,6 +19,21 @@ class HttpLauncherContractTests(unittest.TestCase):
         self.assertIn("JARVIS_HTTP_HOST=0.0.0.0", launcher)
         self.assertIn("JARVIS_HTTP_PORT=${container_port}", launcher)
         self.assertIn("JARVIS_HTTP_ALLOWED_HOSTS=${allowed_hosts}", launcher)
+        self.assertIn(
+            'mcp_allowed_hosts="${JARVIS_MCP_ALLOWED_HOSTS:-127.0.0.1:*,localhost:*}"',
+            launcher,
+        )
+        self.assertIn("JARVIS_MCP_ALLOWED_HOSTS=${mcp_allowed_hosts}", launcher)
+        self.assertIn(
+            'http_mcp_enabled="${JARVIS_HTTP_MCP_ENABLED:-false}"', launcher
+        )
+        self.assertIn("JARVIS_HTTP_MCP_ENABLED=${http_mcp_enabled}", launcher)
+        self.assertIn('web_note_scope="${JARVIS_WEB_NOTE_SCOPE:-none}"', launcher)
+        self.assertIn("panoramas|all-visible-markdown", launcher)
+        self.assertIn("JARVIS_WEB_NOTE_SCOPE=${web_note_scope}", launcher)
+        self.assertIn("JARVIS_WEB_NOTE_PASSWORD_FILE=/run/secrets/jarvis-web-note-password", launcher)
+        self.assertIn("dst=/run/secrets/jarvis-web-note-password,readonly", launcher)
+        self.assertNotIn("JARVIS_WEB_NOTE_PASSWORD=", launcher)
         self.assertIn("--read-only", launcher)
         self.assertIn("--cap-drop ALL", launcher)
         self.assertIn("--security-opt no-new-privileges", launcher)

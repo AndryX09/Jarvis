@@ -226,21 +226,43 @@ def read_note_from_vault(root: Path, relative_path: str) -> dict[str, object]:
 
 
 def list_notes_in_vault(
-    root: Path, relative_folder: str = "", max_results: int = 100
+    root: Path,
+    relative_folder: str = "",
+    max_results: int = 100,
+    *,
+    offset: int = 0,
+    filename: str | None = None,
 ) -> dict[str, object]:
     limit = _validate_limit(max_results, maximum=MAX_LIST_LIMIT)
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        raise JarvisError("The result offset must be a non-negative integer.")
+    if filename is not None and (
+        not isinstance(filename, str)
+        or not filename
+        or "/" in filename
+        or "\\" in filename
+    ):
+        raise JarvisError("The filename filter must be one plain filename.")
     start = _folder(root, relative_folder)
     notes: list[dict[str, object]] = []
     limit_reached = False
+    matched = 0
     for note in _markdown_files(root, start):
+        if filename is not None and note.name != filename:
+            continue
+        if matched < offset:
+            matched += 1
+            continue
         if len(notes) >= limit:
             limit_reached = True
             break
         notes.append(_note_metadata(root, note, include_hash=False))
+        matched += 1
     return {
         "folder": start.relative_to(root).as_posix() if start != root else "",
         "notes": notes,
         "limit_reached": limit_reached,
+        "offset": offset,
     }
 
 

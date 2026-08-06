@@ -94,18 +94,67 @@ JARVIS_TRANSPORT=streamable-http
 JARVIS_HTTP_HOST=127.0.0.1
 JARVIS_HTTP_PORT=8765
 JARVIS_HTTP_ALLOWED_HOSTS=127.0.0.1:*,localhost:*
+JARVIS_MCP_ALLOWED_HOSTS=127.0.0.1:*,localhost:*
+JARVIS_HTTP_MCP_ENABLED=false
 ```
 
-The MCP endpoint is then `http://127.0.0.1:8765/mcp`. The port must be between 1 and
-65535. Unknown transports and an empty HTTP host allowlist are rejected before startup.
-DNS rebinding protection is enabled by FastMCP. Add a reviewed public hostname to
-`JARVIS_HTTP_ALLOWED_HOSTS` only when a trusted reverse proxy is ready.
+When explicitly enabled, the MCP endpoint is `http://127.0.0.1:8765/mcp`. The port must
+be between 1 and 65535. Unknown transports and an empty HTTP host allowlist are rejected
+before startup.
+DNS rebinding protection is enabled by FastMCP. `JARVIS_HTTP_ALLOWED_HOSTS` controls the
+read-only browser routes, while the narrower `JARVIS_MCP_ALLOWED_HOSTS` independently
+controls the write-capable `/mcp` endpoint. `JARVIS_HTTP_MCP_ENABLED` is `false` by
+default and makes `/mcp` reject every request regardless of how a proxy rewrites Host;
+stdio remains available. A public hostname may be added to the browser allowlist without
+adding it to the MCP allowlist or enabling MCP over HTTP.
+
+The same HTTP server exposes a dependency-free, read-only status interface at `/` and
+its JSON data source at `/api/status`. The page displays the safe operational metadata
+returned by `jarvis_status`; it does not expose note contents, capture contents, or
+mutation controls. Host and Origin validation still applies, but `/mcp` has the separate,
+loopback-only host allowlist described above. Set `JARVIS_HTTP_MCP_ENABLED=true` only for
+an explicitly reviewed local HTTP client that also matches `JARVIS_MCP_ALLOWED_HOSTS`.
+
+### Password-protected note reading
+
+The optional `/notes` page and its `/api/notes` and `/api/note` data sources expose
+visible Markdown in read-only mode. They use HTTP Basic authentication with username
+`jarvis`; the password is read from a small regular file mounted read-only into the
+container and must contain at least 12 bytes. The password value must never be stored in
+the repository or passed as a Docker environment variable. The note list is paginated in
+pages of at most 500 entries; filtering for panoramas happens before pagination.
+
+Web note reading is disabled by default. The launcher accepts these scopes:
+
+- `JARVIS_WEB_NOTE_SCOPE=none`: expose no note-reading route;
+- `JARVIS_WEB_NOTE_SCOPE=panoramas`: expose only notes named `00 — Panoramica.md`;
+- `JARVIS_WEB_NOTE_SCOPE=all-visible-markdown`: expose every visible Markdown note.
+
+For the initial restricted deployment, create a host-side password file without putting
+the password in shell history, then start with the panorama scope:
+
+```bash
+install -m 600 /dev/null /home/satellite/jarvis/.jarvis-web-note-password
+read -r -s JARVIS_WEB_NOTE_PASSWORD_VALUE
+printf '%s' "$JARVIS_WEB_NOTE_PASSWORD_VALUE" > /home/satellite/jarvis/.jarvis-web-note-password
+unset JARVIS_WEB_NOTE_PASSWORD_VALUE
+
+JARVIS_WEB_NOTE_SCOPE=panoramas \
+JARVIS_WEB_NOTE_PASSWORD_FILE=/home/satellite/jarvis/.jarvis-web-note-password \
+./run-jarvis-http-main-v1.4.0.sh
+```
+
+Changing only the scope to `all-visible-markdown` expands future access to all visible
+Markdown while retaining password protection, hidden-path rejection, vault confinement,
+and read-only HTTP methods. Public use requires HTTPS at the reverse proxy because Basic
+credentials accompany each protected request.
 
 TLS is deliberately not terminated by Jarvis. A reverse proxy such as Cloudflare may
 terminate public HTTPS and forward to this loopback HTTP origin. The `/mcp` endpoint
-contains write-capable tools and must never be exposed directly to the LAN or Internet
-without an approved authentication layer. Jarvis 1.4.0 does not change Cloudflare or
-open a router port.
+contains write-capable tools, so the public launcher keeps MCP-over-HTTP disabled and its
+separate default allowlist accepts only loopback Host headers as defense in depth. Public
+requests are rejected even if Cloudflare rewrites Host. Jarvis 1.4.0 does not change
+Cloudflare or open a router port.
 
 ## Safety contract
 
@@ -153,6 +202,8 @@ separate SHA-256-pinned artifact so it can verify the archive before extraction.
 The restricted launcher mounts:
 
 - the synchronized vault as `/vault`;
-- protected Jarvis state as `/state`.
+- protected Jarvis state as `/state`;
+- when web note reading is enabled, the password file read-only as
+  `/run/secrets/jarvis-web-note-password`.
 
 The existing stdio transport remains available alongside the HTTP transport.
