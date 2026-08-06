@@ -22,6 +22,7 @@ class RuntimeConfigTests(unittest.TestCase):
             ("http://127.0.0.1:*", "http://localhost:*"),
         )
         self.assertFalse(config.http_mcp_enabled)
+        self.assertEqual(config.mcp_bearer_token_file, "")
         self.assertEqual(config.dashboard_totp_secret_file, "")
         self.assertEqual(config.dashboard_trusted_proxy_peers, ())
         self.assertEqual(config.web_note_scope, "none")
@@ -41,6 +42,7 @@ class RuntimeConfigTests(unittest.TestCase):
                     "http://127.0.0.1:*,https://jarvis.dvdbnc.dpdns.org"
                 ),
                 "JARVIS_HTTP_MCP_ENABLED": "true",
+                "JARVIS_MCP_BEARER_TOKEN_FILE": "/run/secrets/jarvis-mcp-token",
                 "JARVIS_DASHBOARD_TOTP_SECRET_FILE": "/run/secrets/jarvis-dashboard-totp",
                 "JARVIS_DASHBOARD_TRUSTED_PROXY_PEERS": "172.17.0.1",
             }
@@ -66,6 +68,10 @@ class RuntimeConfigTests(unittest.TestCase):
             ("http://127.0.0.1:*", "https://jarvis.dvdbnc.dpdns.org"),
         )
         self.assertTrue(config.http_mcp_enabled)
+        self.assertEqual(
+            config.mcp_bearer_token_file,
+            "/run/secrets/jarvis-mcp-token",
+        )
         self.assertEqual(
             config.dashboard_totp_secret_file,
             "/run/secrets/jarvis-dashboard-totp",
@@ -129,6 +135,10 @@ class RuntimeConfigTests(unittest.TestCase):
     def test_unknown_http_mcp_enabled_value_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "JARVIS_HTTP_MCP_ENABLED"):
             load_runtime_config({"JARVIS_HTTP_MCP_ENABLED": "yes"})
+
+    def test_enabled_http_mcp_requires_bearer_token_file(self):
+        with self.assertRaisesRegex(ValueError, "JARVIS_MCP_BEARER_TOKEN_FILE"):
+            load_runtime_config({"JARVIS_HTTP_MCP_ENABLED": "true"})
 
 
 if __name__ == "__main__":

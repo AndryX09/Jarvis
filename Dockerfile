@@ -12,6 +12,7 @@ RUN pip install --no-cache-dir --requirement /app/requirements.txt \
     && useradd --uid 10001 --create-home --shell /usr/sbin/nologin jarvis
 
 COPY app/ /app/
+RUN chmod -R a+rX /app
 
 USER 10001:10001
 

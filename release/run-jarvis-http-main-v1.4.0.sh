@@ -14,10 +14,12 @@ allowed_hosts="${JARVIS_HTTP_ALLOWED_HOSTS:-127.0.0.1:*,localhost:*}"
 allowed_origins="${JARVIS_HTTP_ALLOWED_ORIGINS:-http://127.0.0.1:*,http://localhost:*}"
 mcp_allowed_hosts="${JARVIS_MCP_ALLOWED_HOSTS:-127.0.0.1:*,localhost:*}"
 http_mcp_enabled="${JARVIS_HTTP_MCP_ENABLED:-false}"
+mcp_bearer_token_file="${JARVIS_MCP_BEARER_TOKEN_FILE:-}"
 web_note_scope="${JARVIS_WEB_NOTE_SCOPE:-none}"
 web_note_password_file="${JARVIS_WEB_NOTE_PASSWORD_FILE:-/home/satellite/jarvis/.jarvis-web-note-password}"
 dashboard_totp_secret_file="${JARVIS_DASHBOARD_TOTP_SECRET_FILE:-}"
 dashboard_trusted_proxy_peers="${JARVIS_DASHBOARD_TRUSTED_PROXY_PEERS:-}"
+dashboard_ui_dir="${JARVIS_DASHBOARD_UI_DIR:-}"
 container_name="jarvis-main-http-v1"
 
 case "$host_port" in
@@ -34,6 +36,19 @@ case "$http_mcp_enabled" in
   true|false) ;;
   *) fail "JARVIS_HTTP_MCP_ENABLED deve essere true o false" ;;
 esac
+if test "$http_mcp_enabled" = true
+then
+  test -f "$mcp_bearer_token_file" \
+    || fail "file token Bearer MCP assente o non regolare"
+  test ! -L "$mcp_bearer_token_file" \
+    || fail "il file token Bearer MCP non può essere un collegamento simbolico"
+  test -r "$mcp_bearer_token_file" \
+    || fail "file token Bearer MCP non leggibile"
+  case "$(stat -c '%a' "$mcp_bearer_token_file")" in
+    400|600) ;;
+    *) fail "il file token Bearer MCP deve avere permessi 400 o 600" ;;
+  esac
+fi
 case "$web_note_scope" in
   none) ;;
   panoramas|all-visible-markdown)
@@ -63,6 +78,26 @@ then
     *) fail "il file segreto TOTP dashboard deve avere permessi 400 o 600" ;;
   esac
 fi
+if test -n "$dashboard_ui_dir"
+then
+  case "$dashboard_ui_dir" in
+    /*) ;;
+    *) fail "JARVIS_DASHBOARD_UI_DIR deve essere un percorso assoluto" ;;
+  esac
+  test -d "$dashboard_ui_dir" \
+    || fail "directory UI dashboard assente"
+  test ! -L "$dashboard_ui_dir" \
+    || fail "la directory UI dashboard non può essere un collegamento simbolico"
+  dashboard_ui_file="${dashboard_ui_dir}/dashboard.html"
+  test -f "$dashboard_ui_file" \
+    || fail "file HTML dashboard assente o non regolare"
+  test ! -L "$dashboard_ui_file" \
+    || fail "il file HTML dashboard non può essere un collegamento simbolico"
+  test -r "$dashboard_ui_file" \
+    || fail "file HTML dashboard non leggibile"
+  test "$(wc -c < "$dashboard_ui_file")" -le 262144 \
+    || fail "file HTML dashboard troppo grande"
+fi
 
 docker network inspect "$network_name" >/dev/null 2>&1 \
   || fail "rete Docker $network_name assente"
@@ -82,9 +117,15 @@ host_uid="$(id -u)"
 host_gid="$(id -g)"
 
 set --
-if test "$web_note_scope" != "none"
+if test "$http_mcp_enabled" = true
 then
   set -- \
+    --mount "type=bind,src=${mcp_bearer_token_file},dst=/run/secrets/jarvis-mcp-token,readonly" \
+    --env "JARVIS_MCP_BEARER_TOKEN_FILE=/run/secrets/jarvis-mcp-token"
+fi
+if test "$web_note_scope" != "none"
+then
+  set -- "$@" \
     --mount "type=bind,src=${web_note_password_file},dst=/run/secrets/jarvis-web-note-password,readonly" \
     --env "JARVIS_WEB_NOTE_PASSWORD_FILE=/run/secrets/jarvis-web-note-password"
 fi
@@ -93,6 +134,12 @@ then
   set -- "$@" \
     --mount "type=bind,src=${dashboard_totp_secret_file},dst=/run/secrets/jarvis-dashboard-totp,readonly" \
     --env "JARVIS_DASHBOARD_TOTP_SECRET_FILE=/run/secrets/jarvis-dashboard-totp"
+fi
+if test -n "$dashboard_ui_dir"
+then
+  set -- "$@" \
+    --mount "type=bind,src=${dashboard_ui_dir},dst=/run/jarvis-dashboard-ui,readonly" \
+    --env "JARVIS_DASHBOARD_UI_FILE=/run/jarvis-dashboard-ui/dashboard.html"
 fi
 
 cleanup() {

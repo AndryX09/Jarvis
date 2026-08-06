@@ -33,6 +33,20 @@ class HttpLauncherContractTests(unittest.TestCase):
             'http_mcp_enabled="${JARVIS_HTTP_MCP_ENABLED:-false}"', launcher
         )
         self.assertIn("JARVIS_HTTP_MCP_ENABLED=${http_mcp_enabled}", launcher)
+        self.assertIn(
+            'mcp_bearer_token_file="${JARVIS_MCP_BEARER_TOKEN_FILE:-}"', launcher
+        )
+        self.assertIn("file token Bearer MCP assente o non regolare", launcher)
+        self.assertIn("il file token Bearer MCP deve avere permessi 400 o 600", launcher)
+        self.assertIn(
+            "dst=/run/secrets/jarvis-mcp-token,readonly",
+            launcher,
+        )
+        self.assertIn(
+            "JARVIS_MCP_BEARER_TOKEN_FILE=/run/secrets/jarvis-mcp-token",
+            launcher,
+        )
+        self.assertNotIn("JARVIS_MCP_BEARER_TOKEN=", launcher)
         self.assertIn('web_note_scope="${JARVIS_WEB_NOTE_SCOPE:-none}"', launcher)
         self.assertIn("panoramas|all-visible-markdown", launcher)
         self.assertIn("JARVIS_WEB_NOTE_SCOPE=${web_note_scope}", launcher)
@@ -55,6 +69,15 @@ class HttpLauncherContractTests(unittest.TestCase):
         )
         self.assertIn(
             "JARVIS_DASHBOARD_TRUSTED_PROXY_PEERS=${dashboard_trusted_proxy_peers}",
+            launcher,
+        )
+        self.assertIn(
+            'dashboard_ui_dir="${JARVIS_DASHBOARD_UI_DIR:-}"',
+            launcher,
+        )
+        self.assertIn("dst=/run/jarvis-dashboard-ui,readonly", launcher)
+        self.assertIn(
+            "JARVIS_DASHBOARD_UI_FILE=/run/jarvis-dashboard-ui/dashboard.html",
             launcher,
         )
         self.assertIn("--read-only", launcher)

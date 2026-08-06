@@ -57,6 +57,7 @@ def _running_http_server(
     dashboard_trusted_proxy: bool = False,
     dashboard_trusted_proxy_peer: str | None = None,
     http_mcp_enabled: bool = False,
+    dashboard_ui_file: Path | None = None,
 ):
     with tempfile.TemporaryDirectory() as temporary:
         temporary_root = Path(temporary)
@@ -66,7 +67,10 @@ def _running_http_server(
         state.mkdir()
         (vault / "Idea.md").write_text("# Idea\n", encoding="utf-8")
         password_file = temporary_root / "web-note-password"
+        mcp_token_file = temporary_root / "mcp-token"
         totp_secret_file = temporary_root / "dashboard-totp-secret"
+        if http_mcp_enabled:
+            mcp_token_file.write_text("A" * 43, encoding="ascii")
         if dashboard_enabled:
             totp_secret_file.write_text(
                 "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ\n",
@@ -132,8 +136,12 @@ def _running_http_server(
                     "JARVIS_WEB_NOTE_PASSWORD_FILE": str(password_file),
                 }
             )
+        if http_mcp_enabled:
+            env["JARVIS_MCP_BEARER_TOKEN_FILE"] = str(mcp_token_file)
         if dashboard_enabled:
             env["JARVIS_DASHBOARD_TOTP_SECRET_FILE"] = str(totp_secret_file)
+        if dashboard_ui_file is not None:
+            env["JARVIS_DASHBOARD_UI_FILE"] = str(dashboard_ui_file)
         if dashboard_trusted_proxy_peer is not None:
             env["JARVIS_DASHBOARD_TRUSTED_PROXY_PEERS"] = dashboard_trusted_proxy_peer
         elif dashboard_trusted_proxy:
@@ -520,6 +528,49 @@ class StatusInterfaceIntegrationTests(unittest.TestCase):
         self.assertIn("http_mcp_enabled", html)
         self.assertNotIn("<dd>Bloccato</dd>", html)
         self.assertNotIn("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", html)
+
+    def test_authenticated_dashboard_reloads_custom_ui_file_without_restart(self):
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, request, file_pointer, code, message, headers, url):
+                return None
+
+        code = _current_totp_code(b"12345678901234567890")
+        form = urllib.parse.urlencode({"code": code}).encode("ascii")
+        with tempfile.TemporaryDirectory() as temporary:
+            page = Path(temporary) / "dashboard.html"
+            page.write_text("<!doctype html><p>prima versione</p>", encoding="utf-8")
+            with _running_http_server(
+                dashboard_enabled=True,
+                dashboard_ui_file=page,
+            ) as base_url:
+                login_request = urllib.request.Request(
+                    f"{base_url}/login",
+                    data=form,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    method="POST",
+                )
+                opener = urllib.request.build_opener(NoRedirect)
+                with self.assertRaises(urllib.error.HTTPError) as raised:
+                    opener.open(login_request, timeout=10)
+                session_cookie = raised.exception.headers["Set-Cookie"].split(";", 1)[0]
+
+                first_request = urllib.request.Request(
+                    f"{base_url}/dashboard",
+                    headers={"Cookie": session_cookie},
+                )
+                with urllib.request.urlopen(first_request, timeout=10) as response:
+                    first = response.read().decode("utf-8")
+
+                page.write_text("<!doctype html><p>seconda versione</p>", encoding="utf-8")
+                second_request = urllib.request.Request(
+                    f"{base_url}/dashboard",
+                    headers={"Cookie": session_cookie},
+                )
+                with urllib.request.urlopen(second_request, timeout=10) as response:
+                    second = response.read().decode("utf-8")
+
+        self.assertIn("prima versione", first)
+        self.assertIn("seconda versione", second)
 
     def test_valid_totp_login_sets_secure_session_cookie(self):
         class NoRedirect(urllib.request.HTTPRedirectHandler):

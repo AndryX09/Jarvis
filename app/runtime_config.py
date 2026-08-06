@@ -16,6 +16,7 @@ class RuntimeConfig:
     allowed_origins: tuple[str, ...]
     mcp_allowed_hosts: tuple[str, ...]
     http_mcp_enabled: bool
+    mcp_bearer_token_file: str
     dashboard_totp_secret_file: str
     dashboard_trusted_proxy_peers: tuple[str, ...]
     web_note_scope: str
@@ -87,6 +88,13 @@ def load_runtime_config(environ: Mapping[str, str]) -> RuntimeConfig:
     if raw_http_mcp_enabled not in {"true", "false"}:
         raise ValueError("JARVIS_HTTP_MCP_ENABLED must be 'true' or 'false'")
     http_mcp_enabled = raw_http_mcp_enabled == "true"
+    mcp_bearer_token_file = environ.get(
+        "JARVIS_MCP_BEARER_TOKEN_FILE", ""
+    ).strip()
+    if http_mcp_enabled and not mcp_bearer_token_file:
+        raise ValueError(
+            "JARVIS_MCP_BEARER_TOKEN_FILE is required when HTTP MCP is enabled"
+        )
     dashboard_totp_secret_file = environ.get(
         "JARVIS_DASHBOARD_TOTP_SECRET_FILE", ""
     ).strip()
@@ -124,6 +132,7 @@ def load_runtime_config(environ: Mapping[str, str]) -> RuntimeConfig:
         allowed_origins=allowed_origins,
         mcp_allowed_hosts=mcp_allowed_hosts,
         http_mcp_enabled=http_mcp_enabled,
+        mcp_bearer_token_file=mcp_bearer_token_file,
         dashboard_totp_secret_file=dashboard_totp_secret_file,
         dashboard_trusted_proxy_peers=dashboard_trusted_proxy_peers,
         web_note_scope=web_note_scope,

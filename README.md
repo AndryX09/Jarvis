@@ -99,9 +99,9 @@ JARVIS_MCP_ALLOWED_HOSTS=127.0.0.1:*,localhost:*
 JARVIS_HTTP_MCP_ENABLED=false
 ```
 
-When explicitly enabled, the MCP endpoint is `http://127.0.0.1:8765/mcp`. The port must
-be between 1 and 65535. Unknown transports and an empty HTTP host allowlist are rejected
-before startup.
+When explicitly enabled, the loopback MCP endpoint is `http://127.0.0.1:8765/mcp`; a
+reverse proxy may expose that endpoint over HTTPS. The port must be between 1 and 65535.
+Unknown transports and an empty HTTP host allowlist are rejected before startup.
 DNS rebinding protection is enabled by FastMCP. `JARVIS_HTTP_ALLOWED_HOSTS` controls the
 read-only browser routes, while the narrower `JARVIS_MCP_ALLOWED_HOSTS` independently
 controls the write-capable `/mcp` endpoint. `JARVIS_HTTP_MCP_ENABLED` is `false` by
@@ -109,12 +109,49 @@ default and makes `/mcp` reject every request regardless of how a proxy rewrites
 stdio remains available. A public hostname may be added to the browser allowlist without
 adding it to the MCP allowlist or enabling MCP over HTTP.
 
+Enabling HTTP MCP requires `JARVIS_MCP_BEARER_TOKEN_FILE`. Jarvis refuses to start if
+HTTP MCP is enabled without it. The credential is read only from a small regular file
+containing one Bearer token of at least 32 bytes. Generate the file on the server without
+putting the token in shell history:
+
+```bash
+python3 scripts/generate_mcp_bearer_token.py \
+  --output /home/satellite/jarvis/.jarvis-mcp-token
+```
+
+The generator refuses to overwrite an existing file, creates it with mode `600`, and
+shows the sensitive token once. Keep that value out of Git, Docker environment variables,
+launcher arguments, logs, screenshots, documentation, and chat.
+
+For the reviewed public HTTPS client, add the public hostname to the independent MCP Host
+allowlist and pass only the host-side token-file path to the launcher:
+
+```bash
+JARVIS_HTTP_MCP_ENABLED=true \
+JARVIS_MCP_BEARER_TOKEN_FILE=/home/satellite/jarvis/.jarvis-mcp-token \
+JARVIS_MCP_ALLOWED_HOSTS=127.0.0.1:*,localhost:*,jarvis.dvdbnc.dpdns.org \
+./run-jarvis-http-main-v1.4.0.sh
+```
+
+Requests to `https://jarvis.dvdbnc.dpdns.org/mcp` without the exact
+`Authorization: Bearer …` credential still receive `401`. Dashboard TOTP sessions do not
+authorize MCP. In Hermes, add a second connection before removing the disabled one:
+
+```powershell
+hermes mcp add JarvisAuthenticated --url https://jarvis.dvdbnc.dpdns.org/mcp --auth header
+```
+
+Enter the `Authorization` header and `Bearer <token>` only in the local interactive
+prompt, test it with `hermes mcp test JarvisAuthenticated`, then restart Hermes Desktop
+so the authenticated tools are discovered.
+
 The same HTTP server exposes a dependency-free, read-only status interface at `/` and
 its JSON data source at `/api/status`. The page displays the safe operational metadata
 returned by `jarvis_status`; it does not expose note contents, capture contents, or
-mutation controls. Host and Origin validation still applies, but `/mcp` has the separate,
-loopback-only host allowlist described above. Set `JARVIS_HTTP_MCP_ENABLED=true` only for
-an explicitly reviewed local HTTP client that also matches `JARVIS_MCP_ALLOWED_HOSTS`.
+mutation controls. Host and Origin validation still applies, but `/mcp` has the separate
+Host allowlist and Bearer authentication described above. Set
+`JARVIS_HTTP_MCP_ENABLED=true` only with the external token file and an explicitly
+reviewed client Host entry in `JARVIS_MCP_ALLOWED_HOSTS`.
 
 ### TOTP-protected process dashboard
 
@@ -145,6 +182,7 @@ Enable the dashboard by passing only the host-side file path to the launcher:
 JARVIS_DASHBOARD_TOTP_SECRET_FILE=/home/satellite/jarvis/.jarvis-dashboard-totp \
 JARVIS_HTTP_ALLOWED_ORIGINS=https://jarvis.dvdbnc.dpdns.org \
 JARVIS_DASHBOARD_TRUSTED_PROXY_PEERS=VERIFIED_PROXY_PEER_IP \
+JARVIS_DASHBOARD_UI_DIR=/home/satellite/jarvis/jarvis-core-v1.4.0-http/app/dashboard_ui \
 ./run-jarvis-http-main-v1.4.0.sh
 ```
 
@@ -169,6 +207,44 @@ The failure limiter and used-TOTP counters reset when the process restarts. Dash
 sessions are stateless: logout removes the browser cookie but cannot revoke a token that
 was copied beforehand. Rotating the external TOTP secret invalidates every existing
 session when immediate global revocation is required.
+
+#### Fast dashboard UI workflow
+
+The visual dashboard is stored in `app/dashboard_ui/dashboard.html`. Jarvis reads this
+file for every authenticated `/dashboard` request instead of caching it at startup. The
+production launcher can mount the `app/dashboard_ui` directory read-only by setting
+`JARVIS_DASHBOARD_UI_DIR`; mounting the directory rather than one file keeps atomic Git
+file replacements visible to the running container.
+
+For local visual work on Windows, start the loopback-only preview server from PowerShell:
+
+```powershell
+python scripts/preview_dashboard.py
+```
+
+Open `http://127.0.0.1:8877`, edit `app/dashboard_ui/dashboard.html`, save, and refresh.
+The preview uses explicit demo metadata and never reads the vault, state directory, TOTP
+secret, Docker, or the production API.
+
+The watcher console in preview is also simulated. Its `run-cycle`, `pause`, and `resume`
+buttons call a loopback-only preview route, keep state only in memory, and never start a
+process or mutate Jarvis data. The production server does not expose this route; commands
+remain disabled there until a separately reviewed deterministic watcher backend exists.
+
+After committing and pushing a change that modifies only
+`app/dashboard_ui/dashboard.html`, update the server with:
+
+```bash
+python3 scripts/update_dashboard_ui.py
+```
+
+The updater fetches the configured branch, refuses non-fast-forward history, verifies that
+the only changed path is the dashboard HTML, validates its size, UTF-8 encoding, and
+required read-only hooks, confirms the production container's read-only UI mount, and then
+fast-forwards the checkout. A failed post-update validation or public health check restores
+the previous commit automatically. No image build or container restart occurs. If Python,
+Dockerfile, launcher, or any other path changed, it stops and requires the normal full
+deployment workflow.
 
 ### Password-protected note reading
 
@@ -206,10 +282,10 @@ credentials accompany each protected request.
 
 TLS is deliberately not terminated by Jarvis. A reverse proxy such as Cloudflare may
 terminate public HTTPS and forward to this loopback HTTP origin. The `/mcp` endpoint
-contains write-capable tools, so the public launcher keeps MCP-over-HTTP disabled and its
-separate default allowlist accepts only loopback Host headers as defense in depth. Public
-requests are rejected even if Cloudflare rewrites Host. Jarvis 1.4.0 does not change
-Cloudflare or open a router port.
+contains write-capable tools, so HTTP MCP remains disabled by default. Enabling it requires
+both the external Bearer token file and an explicit MCP Host allowlist entry; missing or
+incorrect credentials receive `401`. Jarvis 1.4.0 does not change Cloudflare or open a
+router port.
 
 ## Safety contract
 
@@ -230,8 +306,8 @@ Cloudflare or open a router port.
   CPU/memory/process limits, and only the vault and state mounts are writable.
 - The launcher runs the container as the invoking Linux user so synchronized files
   retain the correct ownership.
-- Each MCP connection uses a unique disposable container name. Multiple clients can
-  read concurrently, while `/state/.jarvis-mutation.lock` serializes mutations.
+- The HTTP service uses one constrained container. Multiple clients can read concurrently,
+  while `/state/.jarvis-mutation.lock` serializes mutations.
 - The launcher stops only its own session container after disconnect or termination.
 
 ## Local tests

@@ -1,3 +1,8 @@
+import os
+from pathlib import Path
+import stat
+
+
 LOGIN_PAGE_HTML = """<!doctype html>
 <html lang="it">
 <head>
@@ -37,98 +42,41 @@ LOGIN_PAGE_HTML = """<!doctype html>
 """
 
 
-DASHBOARD_PAGE_HTML = """<!doctype html>
-<html lang="it">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="color-scheme" content="dark">
-  <title>Processi Jarvis</title>
-  <style>
-    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
-    * { box-sizing: border-box; }
-    body { margin: 0; background: #090b10; color: #f4f5f7; }
-    header, main { width: min(1120px, calc(100% - 32px)); margin: 0 auto; }
-    header { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 30px 0 22px; }
-    .eyebrow { margin: 0 0 7px; color: #77e6b6; font-size: 12px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
-    h1 { margin: 0; font-size: clamp(28px, 5vw, 44px); }
-    .readonly { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid #2c493d; border-radius: 999px; background: #10251d; color: #8bf0c3; font-size: 13px; font-weight: 750; }
-    .readonly::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #77e6b6; box-shadow: 0 0 14px #77e6b6; }
-    .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; padding-bottom: 28px; }
-    .card { grid-column: span 4; min-height: 150px; padding: 20px; border: 1px solid #252a35; border-radius: 16px; background: #11141b; }
-    .wide { grid-column: span 8; }
-    .full { grid-column: 1 / -1; }
-    h2 { margin: 0 0 17px; font-size: 14px; color: #a8afbd; letter-spacing: .04em; }
-    .metric { margin: 0; font-size: 32px; font-weight: 820; }
-    .muted { color: #858d9c; }
-    dl { display: grid; grid-template-columns: 1fr auto; gap: 10px 18px; margin: 0; }
-    dt { color: #929aaa; } dd { margin: 0; font-weight: 720; }
-    ul { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
-    li { display: flex; justify-content: space-between; gap: 14px; padding-top: 9px; border-top: 1px solid #222733; color: #c7ccd5; }
-    footer { display: flex; justify-content: space-between; align-items: center; gap: 18px; padding: 0 0 34px; color: #858d9c; font-size: 13px; }
-    button { padding: 9px 13px; border: 1px solid #343b49; border-radius: 9px; background: transparent; color: #cbd0da; font: inherit; cursor: pointer; }
-    @media (max-width: 760px) { .card, .wide { grid-column: 1 / -1; } header { align-items: flex-start; flex-direction: column; } }
-  </style>
-</head>
-<body data-dashboard="read-only">
-  <header>
-    <div><p class="eyebrow">Jarvis Core</p><h1>Processi Jarvis</h1></div>
-    <span class="readonly">Sola lettura</span>
-  </header>
-  <main class="grid">
-    <section class="card"><h2>Core</h2><p class="metric" id="core-state">—</p><p class="muted" id="core-version">In caricamento</p></section>
-    <section class="card"><h2>Note indicizzate</h2><p class="metric" id="note-count">—</p><p class="muted">Solo metadati; nessun contenuto esposto</p></section>
-    <section class="card"><h2>Eventi audit</h2><p class="metric" id="audit-count">—</p><p class="muted">Registro delle operazioni Jarvis</p></section>
-    <section class="card wide"><h2>Pipeline di acquisizione</h2><dl><dt>Totale</dt><dd id="capture-total">—</dd><dt>In attesa</dt><dd id="capture-pending">—</dd><dt>Pronte</dt><dd id="capture-ready">—</dd><dt>Elaborate</dt><dd id="capture-processed">—</dd></dl></section>
-    <section class="card"><h2>Sicurezza</h2><dl><dt>MCP HTTP</dt><dd id="mcp-http-state">In verifica</dd><dt>Cancellazione automatica</dt><dd>Assente</dd><dt>Dashboard</dt><dd>Read-only</dd></dl></section>
-    <section class="card full"><h2>Attività recente</h2><ul id="activity"><li><span>Caricamento</span><time>—</time></li></ul></section>
-  </main>
-  <footer>
-    <span id="updated">Aggiornamento in corso</span>
-    <form action="/logout" method="post"><button type="submit">Esci</button></form>
-  </footer>
-  <script>
-    const setText = (id, value) => { document.getElementById(id).textContent = String(value ?? "—"); };
-    async function refresh() {
-      try {
-        const response = await fetch("/api/dashboard/status", { cache: "no-store", credentials: "same-origin" });
-        if (response.status === 401) { location.assign("/login"); return; }
-        if (!response.ok) throw new Error("status unavailable");
-        const data = await response.json();
-        setText("core-state", data.core.service || "Online");
-        setText("core-version", `Versione ${data.core.version}`);
-        setText("note-count", data.core.note_count);
-        setText("audit-count", data.core.audit_event_count);
-        setText("capture-total", data.ingestion.captures.total);
-        setText("capture-pending", data.ingestion.captures.pending);
-        setText("capture-ready", data.ingestion.captures.ready);
-        setText("capture-processed", data.ingestion.captures.processed);
-        setText("mcp-http-state", data.security.http_mcp_enabled ? "Abilitato" : "Bloccato");
-        const activity = document.getElementById("activity");
-        activity.replaceChildren();
-        for (const event of data.activity) {
-          const item = document.createElement("li");
-          const action = document.createElement("span");
-          const when = document.createElement("time");
-          action.textContent = event.action || "Evento Jarvis";
-          when.textContent = event.timestamp_utc || "—";
-          item.append(action, when);
-          activity.append(item);
-        }
-        if (!data.activity.length) {
-          const item = document.createElement("li");
-          item.textContent = "Nessuna attività registrata";
-          activity.append(item);
-        }
-        setText("updated", `Aggiornato ${new Date().toLocaleTimeString("it-IT")}`);
-      } catch (error) {
-        setText("core-state", "Non disponibile");
-        setText("updated", "Aggiornamento non riuscito");
-      }
-    }
-    refresh();
-    setInterval(refresh, 15000);
-  </script>
-</body>
-</html>
-"""
+
+
+
+DASHBOARD_PAGE_MAX_BYTES = 256 * 1024
+DEFAULT_DASHBOARD_PAGE_PATH = (
+    Path(__file__).resolve().parent / "dashboard_ui" / "dashboard.html"
+)
+
+
+def load_dashboard_page_html(path_text: str = "") -> str:
+    path = Path(path_text) if path_text else DEFAULT_DASHBOARD_PAGE_PATH
+    if path.is_symlink():
+        raise ValueError("dashboard UI file must not be a symbolic link")
+    resolved = path.resolve(strict=True)
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(resolved, flags)
+    try:
+        file_status = os.fstat(descriptor)
+        if not stat.S_ISREG(file_status.st_mode):
+            raise ValueError("dashboard UI path must name a regular file")
+        if file_status.st_size > DASHBOARD_PAGE_MAX_BYTES:
+            raise ValueError("dashboard UI file is too large")
+
+        chunks = []
+        remaining = DASHBOARD_PAGE_MAX_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, min(64 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        content = b"".join(chunks)
+        if len(content) > DASHBOARD_PAGE_MAX_BYTES:
+            raise ValueError("dashboard UI file is too large")
+    finally:
+        os.close(descriptor)
+    return content.decode("utf-8")

@@ -24,7 +24,8 @@ from dashboard_auth import (
     matching_totp_counter,
     validate_session_token,
 )
-from dashboard_page import DASHBOARD_PAGE_HTML, LOGIN_PAGE_HTML
+from dashboard_page import LOGIN_PAGE_HTML, load_dashboard_page_html
+from mcp_auth import StaticBearerTokenVerifier, load_mcp_bearer_token
 from notes_page import NOTES_PAGE_HTML
 from runtime_config import load_runtime_config
 from status_page import STATUS_PAGE_HTML
@@ -119,6 +120,11 @@ LOGGER = logging.getLogger(__name__)
 VAULT_ROOT = get_vault_root()
 STATE_ROOT = get_state_root()
 RUNTIME_CONFIG = load_runtime_config(os.environ)
+MCP_BEARER_TOKEN = (
+    load_mcp_bearer_token(RUNTIME_CONFIG.mcp_bearer_token_file)
+    if RUNTIME_CONFIG.http_mcp_enabled
+    else None
+)
 WEB_NOTE_PASSWORD = (
     _load_web_note_password(RUNTIME_CONFIG.web_note_password_file)
     if RUNTIME_CONFIG.web_note_scope != "none"
@@ -139,16 +145,14 @@ MCP_TRANSPORT_SECURITY_SETTINGS = TransportSecuritySettings(
     allowed_hosts=list(RUNTIME_CONFIG.mcp_allowed_hosts),
 )
 MCP_TOKEN_VERIFIER = (
-    None if RUNTIME_CONFIG.http_mcp_enabled else _RejectAllMcpTokens()
+    StaticBearerTokenVerifier(MCP_BEARER_TOKEN)
+    if MCP_BEARER_TOKEN is not None
+    else _RejectAllMcpTokens()
 )
-MCP_AUTH_SETTINGS = (
-    None
-    if RUNTIME_CONFIG.http_mcp_enabled
-    else AuthSettings(
-        issuer_url="http://127.0.0.1",
-        resource_server_url=None,
-        required_scopes=[],
-    )
+MCP_AUTH_SETTINGS = AuthSettings(
+    issuer_url="http://127.0.0.1",
+    resource_server_url=None,
+    required_scopes=[],
 )
 STATUS_ROUTE_SECURITY = TransportSecurityMiddleware(
     STATUS_TRANSPORT_SECURITY_SETTINGS
@@ -322,7 +326,18 @@ async def dashboard_page(request: Request) -> Response:
         return RedirectResponse(
             "/login", status_code=303, headers=DASHBOARD_RESPONSE_HEADERS
         )
-    return HTMLResponse(DASHBOARD_PAGE_HTML, headers=DASHBOARD_RESPONSE_HEADERS)
+    try:
+        page_html = load_dashboard_page_html(
+            os.environ.get("JARVIS_DASHBOARD_UI_FILE", "").strip()
+        )
+    except (OSError, UnicodeError, ValueError):
+        LOGGER.exception("Unable to load the dashboard UI file")
+        return Response(
+            "Jarvis dashboard unavailable",
+            status_code=503,
+            headers=DASHBOARD_RESPONSE_HEADERS,
+        )
+    return HTMLResponse(page_html, headers=DASHBOARD_RESPONSE_HEADERS)
 
 
 @mcp.custom_route("/api/dashboard/status", methods=["GET"])
