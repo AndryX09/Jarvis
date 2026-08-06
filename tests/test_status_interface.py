@@ -455,7 +455,7 @@ class StatusInterfaceIntegrationTests(unittest.TestCase):
                 payload = json.load(response)
 
         self.assertEqual(dashboard_headers["X-Frame-Options"], "DENY")
-        self.assertEqual(dashboard_headers["Referrer-Policy"], "no-referrer")
+        self.assertEqual(dashboard_headers["Referrer-Policy"], "same-origin")
         self.assertIn("frame-ancestors 'none'", dashboard_headers["Content-Security-Policy"])
         self.assertEqual(
             set(payload["core"]),

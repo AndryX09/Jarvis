@@ -77,7 +77,7 @@ DASHBOARD_RESPONSE_HEADERS = {
         "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
         "connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
     ),
-    "Referrer-Policy": "no-referrer",
+    "Referrer-Policy": "same-origin",
     "X-Frame-Options": "DENY",
     "X-Content-Type-Options": "nosniff",
 }
