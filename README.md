@@ -94,18 +94,122 @@ JARVIS_TRANSPORT=streamable-http
 JARVIS_HTTP_HOST=127.0.0.1
 JARVIS_HTTP_PORT=8765
 JARVIS_HTTP_ALLOWED_HOSTS=127.0.0.1:*,localhost:*
+JARVIS_HTTP_ALLOWED_ORIGINS=http://127.0.0.1:*,http://localhost:*
+JARVIS_MCP_ALLOWED_HOSTS=127.0.0.1:*,localhost:*
+JARVIS_HTTP_MCP_ENABLED=false
 ```
 
-The MCP endpoint is then `http://127.0.0.1:8765/mcp`. The port must be between 1 and
-65535. Unknown transports and an empty HTTP host allowlist are rejected before startup.
-DNS rebinding protection is enabled by FastMCP. Add a reviewed public hostname to
-`JARVIS_HTTP_ALLOWED_HOSTS` only when a trusted reverse proxy is ready.
+When explicitly enabled, the MCP endpoint is `http://127.0.0.1:8765/mcp`. The port must
+be between 1 and 65535. Unknown transports and an empty HTTP host allowlist are rejected
+before startup.
+DNS rebinding protection is enabled by FastMCP. `JARVIS_HTTP_ALLOWED_HOSTS` controls the
+read-only browser routes, while the narrower `JARVIS_MCP_ALLOWED_HOSTS` independently
+controls the write-capable `/mcp` endpoint. `JARVIS_HTTP_MCP_ENABLED` is `false` by
+default and makes `/mcp` reject every request regardless of how a proxy rewrites Host;
+stdio remains available. A public hostname may be added to the browser allowlist without
+adding it to the MCP allowlist or enabling MCP over HTTP.
+
+The same HTTP server exposes a dependency-free, read-only status interface at `/` and
+its JSON data source at `/api/status`. The page displays the safe operational metadata
+returned by `jarvis_status`; it does not expose note contents, capture contents, or
+mutation controls. Host and Origin validation still applies, but `/mcp` has the separate,
+loopback-only host allowlist described above. Set `JARVIS_HTTP_MCP_ENABLED=true` only for
+an explicitly reviewed local HTTP client that also matches `JARVIS_MCP_ALLOWED_HOSTS`.
+
+### TOTP-protected process dashboard
+
+The optional `/dashboard` interface displays allowlisted operational metadata for Jarvis
+Core, the ingestion queue, audit counts, and recent action names. It has no mutation
+routes, process controls, Docker access, shell access, note paths, note titles, hashes, or
+note contents. Its JSON source is `/api/dashboard/status`.
+
+The dashboard is disabled unless `JARVIS_DASHBOARD_TOTP_SECRET_FILE` names an external
+Base32 secret file. Generate that file on the server and pair it with a TOTP authenticator:
+
+```bash
+python scripts/generate_dashboard_totp.py \
+  --output /home/satellite/jarvis/.jarvis-dashboard-totp \
+  --issuer Jarvis \
+  --account andry
+```
+
+The command refuses to overwrite an existing file, creates a random 160-bit secret with
+mode `600`, and prints the sensitive `otpauth://` pairing URI once. Import that URI into an
+authenticator such as Aegis, 2FAS, or Google Authenticator without copying it into the
+repository or chat. The six-digit code changes every 30 seconds; the underlying secret
+does not rotate on every login.
+
+Enable the dashboard by passing only the host-side file path to the launcher:
+
+```bash
+JARVIS_DASHBOARD_TOTP_SECRET_FILE=/home/satellite/jarvis/.jarvis-dashboard-totp \
+JARVIS_HTTP_ALLOWED_ORIGINS=https://jarvis.dvdbnc.dpdns.org \
+JARVIS_DASHBOARD_TRUSTED_PROXY_PEERS=VERIFIED_PROXY_PEER_IP \
+./run-jarvis-http-main-v1.4.0.sh
+```
+
+Replace `VERIFIED_PROXY_PEER_IP` with the socket peer address actually used by the local
+Cloudflare/Docker proxy. Only requests from that exact peer may use Cloudflare's
+`CF-Connecting-IP` header for per-client login limiting; all other peers are keyed by their
+socket address and cannot spoof the header. Do not add broad subnets or public addresses.
+
+The launcher validates permissions and mounts the file read-only at
+`/run/secrets/jarvis-dashboard-totp`. A successful TOTP login creates an eight-hour
+`Secure`, `HttpOnly`, `SameSite=Strict`, `__Host-` session cookie. Each accepted TOTP time
+counter is single-use, so replaying the same temporary code cannot create another session.
+Repeated login failures are limited
+to five attempts per client per five-minute window. Host and Origin checks run before authentication,
+and protected responses use `Cache-Control: no-store`.
+
+The bundled launcher starts one Jarvis server process, matching the in-memory limiter and
+TOTP replay state. Do not add multiple HTTP workers without first replacing those stores
+with a shared deterministic backend.
+
+The failure limiter and used-TOTP counters reset when the process restarts. Dashboard
+sessions are stateless: logout removes the browser cookie but cannot revoke a token that
+was copied beforehand. Rotating the external TOTP secret invalidates every existing
+session when immediate global revocation is required.
+
+### Password-protected note reading
+
+The optional `/notes` page and its `/api/notes` and `/api/note` data sources expose
+visible Markdown in read-only mode. They use HTTP Basic authentication with username
+`jarvis`; the password is read from a small regular file mounted read-only into the
+container and must contain at least 12 bytes. The password value must never be stored in
+the repository or passed as a Docker environment variable. The note list is paginated in
+pages of at most 500 entries; filtering for panoramas happens before pagination.
+
+Web note reading is disabled by default. The launcher accepts these scopes:
+
+- `JARVIS_WEB_NOTE_SCOPE=none`: expose no note-reading route;
+- `JARVIS_WEB_NOTE_SCOPE=panoramas`: expose only notes named `00 — Panoramica.md`;
+- `JARVIS_WEB_NOTE_SCOPE=all-visible-markdown`: expose every visible Markdown note.
+
+For the initial restricted deployment, create a host-side password file without putting
+the password in shell history, then start with the panorama scope:
+
+```bash
+install -m 600 /dev/null /home/satellite/jarvis/.jarvis-web-note-password
+read -r -s JARVIS_WEB_NOTE_PASSWORD_VALUE
+printf '%s' "$JARVIS_WEB_NOTE_PASSWORD_VALUE" > /home/satellite/jarvis/.jarvis-web-note-password
+unset JARVIS_WEB_NOTE_PASSWORD_VALUE
+
+JARVIS_WEB_NOTE_SCOPE=panoramas \
+JARVIS_WEB_NOTE_PASSWORD_FILE=/home/satellite/jarvis/.jarvis-web-note-password \
+./run-jarvis-http-main-v1.4.0.sh
+```
+
+Changing only the scope to `all-visible-markdown` expands future access to all visible
+Markdown while retaining password protection, hidden-path rejection, vault confinement,
+and read-only HTTP methods. Public use requires HTTPS at the reverse proxy because Basic
+credentials accompany each protected request.
 
 TLS is deliberately not terminated by Jarvis. A reverse proxy such as Cloudflare may
 terminate public HTTPS and forward to this loopback HTTP origin. The `/mcp` endpoint
-contains write-capable tools and must never be exposed directly to the LAN or Internet
-without an approved authentication layer. Jarvis 1.4.0 does not change Cloudflare or
-open a router port.
+contains write-capable tools, so the public launcher keeps MCP-over-HTTP disabled and its
+separate default allowlist accepts only loopback Host headers as defense in depth. Public
+requests are rejected even if Cloudflare rewrites Host. Jarvis 1.4.0 does not change
+Cloudflare or open a router port.
 
 ## Safety contract
 
@@ -121,7 +225,8 @@ open a router port.
   audit tools return metadata, not raw contents.
 - Capture status changes require a current `record_sha256` and follow the enforced
   transition matrix described above.
-- The container has no network, no Linux capabilities, a read-only root filesystem,
+- The HTTP container uses Docker's bridge network but publishes its MCP port only on
+  `127.0.0.1`; it has no Linux capabilities, uses a read-only root filesystem, applies
   CPU/memory/process limits, and only the vault and state mounts are writable.
 - The launcher runs the container as the invoking Linux user so synchronized files
   retain the correct ownership.
@@ -152,7 +257,8 @@ separate SHA-256-pinned artifact so it can verify the archive before extraction.
 The restricted launcher mounts:
 
 - the synchronized vault as `/vault`;
-- protected Jarvis state as `/state`.
+- protected Jarvis state as `/state`;
+- when web note reading is enabled, the password file read-only as
+  `/run/secrets/jarvis-web-note-password`.
 
-Keep the previous image and versioned launcher available throughout rollout. Jarvis Core
-1.3.3 is the rollback target for the 1.4.0 release.
+The existing stdio transport remains available alongside the HTTP transport.

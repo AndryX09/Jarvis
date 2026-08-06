@@ -1,5 +1,7 @@
 import asyncio
+import http.client
 import importlib.metadata
+import json
 import os
 import socket
 import subprocess
@@ -46,6 +48,110 @@ class StreamableHttpIntegrationTests(unittest.TestCase):
         importlib.metadata.version("mcp") == "1.28.1",
         "integration test requires the pinned mcp==1.28.1",
     )
+    def test_public_host_can_read_status_but_cannot_reach_mcp(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary_root = Path(temporary)
+            vault = temporary_root / "vault"
+            state = temporary_root / "state"
+            vault.mkdir()
+            state.mkdir()
+            port = _unused_loopback_port()
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PYTHONDONTWRITEBYTECODE": "1",
+                    "VAULT_ROOT": str(vault),
+                    "STATE_ROOT": str(state),
+                    "JARVIS_TRANSPORT": "streamable-http",
+                    "JARVIS_HTTP_HOST": "127.0.0.1",
+                    "JARVIS_HTTP_PORT": str(port),
+                    "JARVIS_HTTP_ALLOWED_HOSTS": "127.0.0.1:*,public.example",
+                    "JARVIS_MCP_ALLOWED_HOSTS": "127.0.0.1:*",
+                }
+            )
+            process = subprocess.Popen(
+                [sys.executable, str(SERVER)],
+                cwd=str(SERVER.parent),
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                _wait_for_listener(process, port)
+
+                status_connection = http.client.HTTPConnection(
+                    "127.0.0.1", port, timeout=5
+                )
+                status_connection.request(
+                    "GET", "/api/status", headers={"Host": "public.example"}
+                )
+                status_response = status_connection.getresponse()
+                status_code = status_response.status
+                status_response.read()
+                status_connection.close()
+                self.assertEqual(status_code, 200)
+
+                initialize_body = json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2025-06-18",
+                            "capabilities": {},
+                            "clientInfo": {
+                                "name": "boundary-test",
+                                "version": "1",
+                            },
+                        },
+                    }
+                )
+                mcp_headers = {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                }
+                mcp_connection = http.client.HTTPConnection(
+                    "127.0.0.1", port, timeout=5
+                )
+                mcp_connection.request(
+                    "POST",
+                    "/mcp",
+                    body=initialize_body,
+                    headers={"Host": "public.example", **mcp_headers},
+                )
+                mcp_response = mcp_connection.getresponse()
+                mcp_status_code = mcp_response.status
+                mcp_response.read()
+                mcp_connection.close()
+                self.assertIn(mcp_status_code, {401, 421})
+
+                loopback_connection = http.client.HTTPConnection(
+                    "127.0.0.1", port, timeout=5
+                )
+                loopback_connection.request(
+                    "POST",
+                    "/mcp",
+                    body=initialize_body,
+                    headers={f"Host": f"127.0.0.1:{port}", **mcp_headers},
+                )
+                loopback_response = loopback_connection.getresponse()
+                loopback_status_code = loopback_response.status
+                loopback_response.read()
+                loopback_connection.close()
+                self.assertEqual(loopback_status_code, 401)
+            finally:
+                process.terminate()
+                try:
+                    process.communicate(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.communicate(timeout=5)
+
+    @unittest.skipUnless(
+        importlib.metadata.version("mcp") == "1.28.1",
+        "integration test requires the pinned mcp==1.28.1",
+    )
     def test_real_http_handshake_lists_contract_and_calls_status(self):
         with tempfile.TemporaryDirectory() as temporary:
             temporary_root = Path(temporary)
@@ -64,6 +170,7 @@ class StreamableHttpIntegrationTests(unittest.TestCase):
                     "JARVIS_HTTP_HOST": "127.0.0.1",
                     "JARVIS_HTTP_PORT": str(port),
                     "JARVIS_HTTP_ALLOWED_HOSTS": "127.0.0.1:*",
+                    "JARVIS_HTTP_MCP_ENABLED": "true",
                 }
             )
             process = subprocess.Popen(
