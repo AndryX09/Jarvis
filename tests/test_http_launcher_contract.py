@@ -20,6 +20,11 @@ class HttpLauncherContractTests(unittest.TestCase):
         self.assertIn("JARVIS_HTTP_PORT=${container_port}", launcher)
         self.assertIn("JARVIS_HTTP_ALLOWED_HOSTS=${allowed_hosts}", launcher)
         self.assertIn(
+            'allowed_origins="${JARVIS_HTTP_ALLOWED_ORIGINS:-http://127.0.0.1:*,http://localhost:*}"',
+            launcher,
+        )
+        self.assertIn("JARVIS_HTTP_ALLOWED_ORIGINS=${allowed_origins}", launcher)
+        self.assertIn(
             'mcp_allowed_hosts="${JARVIS_MCP_ALLOWED_HOSTS:-127.0.0.1:*,localhost:*}"',
             launcher,
         )
@@ -34,6 +39,24 @@ class HttpLauncherContractTests(unittest.TestCase):
         self.assertIn("JARVIS_WEB_NOTE_PASSWORD_FILE=/run/secrets/jarvis-web-note-password", launcher)
         self.assertIn("dst=/run/secrets/jarvis-web-note-password,readonly", launcher)
         self.assertNotIn("JARVIS_WEB_NOTE_PASSWORD=", launcher)
+        self.assertIn(
+            'dashboard_totp_secret_file="${JARVIS_DASHBOARD_TOTP_SECRET_FILE:-}"',
+            launcher,
+        )
+        self.assertIn(
+            "JARVIS_DASHBOARD_TOTP_SECRET_FILE=/run/secrets/jarvis-dashboard-totp",
+            launcher,
+        )
+        self.assertIn("dst=/run/secrets/jarvis-dashboard-totp,readonly", launcher)
+        self.assertNotIn("JARVIS_DASHBOARD_TOTP_SECRET=", launcher)
+        self.assertIn(
+            'dashboard_trusted_proxy_peers="${JARVIS_DASHBOARD_TRUSTED_PROXY_PEERS:-}"',
+            launcher,
+        )
+        self.assertIn(
+            "JARVIS_DASHBOARD_TRUSTED_PROXY_PEERS=${dashboard_trusted_proxy_peers}",
+            launcher,
+        )
         self.assertIn("--read-only", launcher)
         self.assertIn("--cap-drop ALL", launcher)
         self.assertIn("--security-opt no-new-privileges", launcher)

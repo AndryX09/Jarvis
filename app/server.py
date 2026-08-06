@@ -1,9 +1,12 @@
 import base64
 import binascii
 import hmac
+import ipaddress
 import logging
 import os
 from pathlib import Path
+import time
+from urllib.parse import parse_qs
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.auth.provider import AccessToken
@@ -13,8 +16,15 @@ from mcp.server.transport_security import (
     TransportSecuritySettings,
 )
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
+from dashboard_auth import (
+    create_session_token,
+    load_totp_secret,
+    matching_totp_counter,
+    validate_session_token,
+)
+from dashboard_page import DASHBOARD_PAGE_HTML, LOGIN_PAGE_HTML
 from notes_page import NOTES_PAGE_HTML
 from runtime_config import load_runtime_config
 from status_page import STATUS_PAGE_HTML
@@ -54,6 +64,23 @@ WEB_NOTE_RESPONSE_HEADERS = {
     "X-Content-Type-Options": "nosniff",
 }
 WEB_NOTE_PAGE_SIZE = 500
+DASHBOARD_SESSION_COOKIE = "__Host-jarvis_dashboard_session"
+DASHBOARD_SESSION_MAX_AGE_SECONDS = 28_800
+DASHBOARD_LOGIN_MAX_FAILURES = 5
+DASHBOARD_LOGIN_WINDOW_SECONDS = 300
+DASHBOARD_LOGIN_MAX_CLIENTS = 2048
+DASHBOARD_LOGIN_FAILURES: dict[str, list[float]] = {}
+DASHBOARD_USED_TOTP_COUNTERS: set[int] = set()
+DASHBOARD_RESPONSE_HEADERS = {
+    "Cache-Control": "no-store",
+    "Content-Security-Policy": (
+        "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
+        "connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+    ),
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+}
 
 
 class _RejectAllMcpTokens:
@@ -97,9 +124,15 @@ WEB_NOTE_PASSWORD = (
     if RUNTIME_CONFIG.web_note_scope != "none"
     else None
 )
+DASHBOARD_TOTP_SECRET = (
+    load_totp_secret(RUNTIME_CONFIG.dashboard_totp_secret_file)
+    if RUNTIME_CONFIG.dashboard_totp_secret_file
+    else None
+)
 STATUS_TRANSPORT_SECURITY_SETTINGS = TransportSecuritySettings(
     enable_dns_rebinding_protection=True,
     allowed_hosts=list(RUNTIME_CONFIG.allowed_hosts),
+    allowed_origins=list(RUNTIME_CONFIG.allowed_origins),
 )
 MCP_TRANSPORT_SECURITY_SETTINGS = TransportSecuritySettings(
     enable_dns_rebinding_protection=True,
@@ -185,6 +218,73 @@ def _web_note_path_allowed(path: str) -> bool:
     return False
 
 
+def _dashboard_session_valid(request: Request) -> bool:
+    if DASHBOARD_TOTP_SECRET is None:
+        return False
+    return validate_session_token(
+        DASHBOARD_TOTP_SECRET,
+        request.cookies.get(DASHBOARD_SESSION_COOKIE, ""),
+        now=int(time.time()),
+        max_age_seconds=DASHBOARD_SESSION_MAX_AGE_SECONDS,
+    )
+
+
+def _dashboard_login_key(request: Request) -> str:
+    peer = request.client.host if request.client is not None else "unknown"
+    if peer in RUNTIME_CONFIG.dashboard_trusted_proxy_peers:
+        forwarded = request.headers.get("cf-connecting-ip", "")
+        if forwarded and "," not in forwarded:
+            try:
+                client_ip = ipaddress.ip_address(forwarded.strip())
+            except ValueError:
+                pass
+            else:
+                return f"client:{client_ip.compressed}"
+    return f"peer:{peer}"
+
+
+def _dashboard_login_failures(key: str, now: float) -> list[float]:
+    cutoff = now - DASHBOARD_LOGIN_WINDOW_SECONDS
+    for existing_key, existing_failures in tuple(DASHBOARD_LOGIN_FAILURES.items()):
+        current = [attempted_at for attempted_at in existing_failures if attempted_at >= cutoff]
+        if current:
+            DASHBOARD_LOGIN_FAILURES[existing_key] = current
+        else:
+            DASHBOARD_LOGIN_FAILURES.pop(existing_key, None)
+    return DASHBOARD_LOGIN_FAILURES.get(key, [])
+
+
+def _record_dashboard_login_failure(key: str, now: float) -> None:
+    failures = _dashboard_login_failures(key, now)
+    DASHBOARD_LOGIN_FAILURES[key] = [*failures, now]
+    overflow = len(DASHBOARD_LOGIN_FAILURES) - DASHBOARD_LOGIN_MAX_CLIENTS
+    if overflow > 0:
+        oldest_keys = sorted(
+            DASHBOARD_LOGIN_FAILURES,
+            key=lambda existing_key: DASHBOARD_LOGIN_FAILURES[existing_key][-1],
+        )
+        for existing_key in oldest_keys[:overflow]:
+            DASHBOARD_LOGIN_FAILURES.pop(existing_key, None)
+
+
+async def _read_limited_request_body(request: Request, max_bytes: int) -> bytes | None:
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            declared_length = int(content_length, 10)
+        except ValueError:
+            return None
+        if declared_length < 0 or declared_length > max_bytes:
+            return None
+
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > max_bytes:
+            return None
+    return bytes(body)
+
+
 @mcp.custom_route("/api/status", methods=["GET"])
 async def status_api(request: Request) -> Response:
     """Return the same safe, read-only status data exposed by the MCP tool."""
@@ -197,6 +297,7 @@ async def status_api(request: Request) -> Response:
         LOGGER.exception("Unable to collect Jarvis status for the public status API")
         return JSONResponse({"error": "Jarvis status unavailable"}, status_code=503)
     status["web_note_reading_available"] = WEB_NOTE_PASSWORD is not None
+    status["dashboard_available"] = DASHBOARD_TOTP_SECRET is not None
     return JSONResponse(status)
 
 
@@ -207,6 +308,180 @@ async def status_page(request: Request) -> Response:
     if validation_error is not None:
         return validation_error
     return HTMLResponse(STATUS_PAGE_HTML)
+
+
+@mcp.custom_route("/dashboard", methods=["GET"])
+async def dashboard_page(request: Request) -> Response:
+    """Serve the authenticated, read-only Jarvis dashboard."""
+    validation_error = await STATUS_ROUTE_SECURITY.validate_request(request)
+    if validation_error is not None:
+        return validation_error
+    if DASHBOARD_TOTP_SECRET is None:
+        return Response("Not Found", status_code=404, headers=DASHBOARD_RESPONSE_HEADERS)
+    if not _dashboard_session_valid(request):
+        return RedirectResponse(
+            "/login", status_code=303, headers=DASHBOARD_RESPONSE_HEADERS
+        )
+    return HTMLResponse(DASHBOARD_PAGE_HTML, headers=DASHBOARD_RESPONSE_HEADERS)
+
+
+@mcp.custom_route("/api/dashboard/status", methods=["GET"])
+async def dashboard_status_api(request: Request) -> Response:
+    """Return allowlisted Jarvis process metadata to an authenticated session."""
+    validation_error = await STATUS_ROUTE_SECURITY.validate_request(request)
+    if validation_error is not None:
+        return validation_error
+    if DASHBOARD_TOTP_SECRET is None:
+        return Response("Not Found", status_code=404, headers=DASHBOARD_RESPONSE_HEADERS)
+    if not _dashboard_session_valid(request):
+        return JSONResponse(
+            {"error": "Authentication required"},
+            status_code=401,
+            headers=DASHBOARD_RESPONSE_HEADERS,
+        )
+    try:
+        raw_core = get_vault_status(VAULT_ROOT, STATE_ROOT)
+        raw_ingestion = get_ingestion_status(VAULT_ROOT, STATE_ROOT)
+        raw_activity = get_recent_activity(STATE_ROOT, 20)["events"]
+    except (JarvisError, OSError, UnicodeError):
+        LOGGER.exception("Unable to build the read-only dashboard status")
+        return JSONResponse(
+            {"error": "Jarvis dashboard unavailable"},
+            status_code=503,
+            headers=DASHBOARD_RESPONSE_HEADERS,
+        )
+    core_keys = (
+        "service",
+        "version",
+        "vault_mode",
+        "note_count",
+        "audit_event_count",
+        "ingestion_available",
+        "delete_tool_available",
+        "network_required",
+    )
+    capture_count_keys = ("total", "pending", "ready", "processed", "skipped")
+    activity = [
+        {
+            key: event[key]
+            for key in ("action", "timestamp_utc")
+            if key in event
+        }
+        for event in raw_activity
+        if isinstance(event, dict)
+    ]
+    return JSONResponse(
+        {
+            "core": {key: raw_core[key] for key in core_keys},
+            "ingestion": {
+                "captures": {
+                    key: raw_ingestion["captures"][key] for key in capture_count_keys
+                },
+                "raw_material_is_preserved": raw_ingestion[
+                    "raw_material_is_preserved"
+                ],
+                "automatic_deletion_available": raw_ingestion[
+                    "automatic_deletion_available"
+                ],
+            },
+            "security": {
+                "http_mcp_enabled": RUNTIME_CONFIG.http_mcp_enabled,
+                "dashboard_mode": "read-only",
+            },
+            "activity": activity,
+        },
+        headers=DASHBOARD_RESPONSE_HEADERS,
+    )
+
+
+@mcp.custom_route("/login", methods=["GET", "POST"])
+async def dashboard_login_page(request: Request) -> Response:
+    """Serve the TOTP login form when the dashboard is enabled."""
+    validation_error = await STATUS_ROUTE_SECURITY.validate_request(request)
+    if validation_error is not None:
+        return validation_error
+    if DASHBOARD_TOTP_SECRET is None:
+        return Response("Not Found", status_code=404, headers=DASHBOARD_RESPONSE_HEADERS)
+    if request.method == "GET":
+        return HTMLResponse(LOGIN_PAGE_HTML, headers=DASHBOARD_RESPONSE_HEADERS)
+    login_key = _dashboard_login_key(request)
+    monotonic_now = time.monotonic()
+    if len(_dashboard_login_failures(login_key, monotonic_now)) >= DASHBOARD_LOGIN_MAX_FAILURES:
+        return Response(
+            "Too many attempts",
+            status_code=429,
+            headers={
+                **DASHBOARD_RESPONSE_HEADERS,
+                "Retry-After": str(DASHBOARD_LOGIN_WINDOW_SECONDS),
+            },
+        )
+    if not request.headers.get("content-type", "").casefold().startswith(
+        "application/x-www-form-urlencoded"
+    ):
+        _record_dashboard_login_failure(login_key, monotonic_now)
+        return Response("Invalid request", status_code=400, headers=DASHBOARD_RESPONSE_HEADERS)
+    body = await _read_limited_request_body(request, 1024)
+    if body is None:
+        _record_dashboard_login_failure(login_key, monotonic_now)
+        return Response("Invalid request", status_code=400, headers=DASHBOARD_RESPONSE_HEADERS)
+    try:
+        fields = parse_qs(
+            body.decode("ascii"), strict_parsing=True, max_num_fields=2
+        )
+        codes = fields["code"]
+    except (KeyError, UnicodeDecodeError, ValueError):
+        code = ""
+    else:
+        code = codes[0] if len(codes) == 1 else ""
+    now = int(time.time())
+    current_counter = now // 30
+    DASHBOARD_USED_TOTP_COUNTERS.intersection_update(
+        counter
+        for counter in DASHBOARD_USED_TOTP_COUNTERS
+        if counter >= current_counter - 1
+    )
+    matched_counter = matching_totp_counter(DASHBOARD_TOTP_SECRET, code, now=now)
+    if matched_counter is None or matched_counter in DASHBOARD_USED_TOTP_COUNTERS:
+        _record_dashboard_login_failure(login_key, monotonic_now)
+        return HTMLResponse(
+            LOGIN_PAGE_HTML, status_code=401, headers=DASHBOARD_RESPONSE_HEADERS
+        )
+    DASHBOARD_USED_TOTP_COUNTERS.add(matched_counter)
+    DASHBOARD_LOGIN_FAILURES.pop(login_key, None)
+    response = RedirectResponse(
+        "/dashboard", status_code=303, headers=DASHBOARD_RESPONSE_HEADERS
+    )
+    response.set_cookie(
+        DASHBOARD_SESSION_COOKIE,
+        create_session_token(DASHBOARD_TOTP_SECRET, now=now),
+        max_age=DASHBOARD_SESSION_MAX_AGE_SECONDS,
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="strict",
+    )
+    return response
+
+
+@mcp.custom_route("/logout", methods=["POST"])
+async def dashboard_logout(request: Request) -> Response:
+    """Clear the dashboard session cookie without mutating Jarvis state."""
+    validation_error = await STATUS_ROUTE_SECURITY.validate_request(request)
+    if validation_error is not None:
+        return validation_error
+    if DASHBOARD_TOTP_SECRET is None:
+        return Response("Not Found", status_code=404, headers=DASHBOARD_RESPONSE_HEADERS)
+    response = RedirectResponse(
+        "/login", status_code=303, headers=DASHBOARD_RESPONSE_HEADERS
+    )
+    response.delete_cookie(
+        DASHBOARD_SESSION_COOKIE,
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="strict",
+    )
+    return response
 
 
 @mcp.custom_route("/notes", methods=["GET"])
@@ -528,5 +803,22 @@ def recent_activity(max_results: int = 20) -> dict[str, object]:
     return _safe(get_recent_activity, STATE_ROOT, max_results)
 
 
+def run_server() -> None:
+    if RUNTIME_CONFIG.transport != "streamable-http":
+        mcp.run(transport=RUNTIME_CONFIG.transport)
+        return
+
+    import uvicorn
+
+    config = uvicorn.Config(
+        mcp.streamable_http_app(),
+        host=RUNTIME_CONFIG.host,
+        port=RUNTIME_CONFIG.port,
+        log_level=mcp.settings.log_level.lower(),
+        proxy_headers=False,
+    )
+    uvicorn.Server(config).run()
+
+
 if __name__ == "__main__":
-    mcp.run(transport=RUNTIME_CONFIG.transport)
+    run_server()

@@ -94,6 +94,7 @@ JARVIS_TRANSPORT=streamable-http
 JARVIS_HTTP_HOST=127.0.0.1
 JARVIS_HTTP_PORT=8765
 JARVIS_HTTP_ALLOWED_HOSTS=127.0.0.1:*,localhost:*
+JARVIS_HTTP_ALLOWED_ORIGINS=http://127.0.0.1:*,http://localhost:*
 JARVIS_MCP_ALLOWED_HOSTS=127.0.0.1:*,localhost:*
 JARVIS_HTTP_MCP_ENABLED=false
 ```
@@ -114,6 +115,60 @@ returned by `jarvis_status`; it does not expose note contents, capture contents,
 mutation controls. Host and Origin validation still applies, but `/mcp` has the separate,
 loopback-only host allowlist described above. Set `JARVIS_HTTP_MCP_ENABLED=true` only for
 an explicitly reviewed local HTTP client that also matches `JARVIS_MCP_ALLOWED_HOSTS`.
+
+### TOTP-protected process dashboard
+
+The optional `/dashboard` interface displays allowlisted operational metadata for Jarvis
+Core, the ingestion queue, audit counts, and recent action names. It has no mutation
+routes, process controls, Docker access, shell access, note paths, note titles, hashes, or
+note contents. Its JSON source is `/api/dashboard/status`.
+
+The dashboard is disabled unless `JARVIS_DASHBOARD_TOTP_SECRET_FILE` names an external
+Base32 secret file. Generate that file on the server and pair it with a TOTP authenticator:
+
+```bash
+python scripts/generate_dashboard_totp.py \
+  --output /home/satellite/jarvis/.jarvis-dashboard-totp \
+  --issuer Jarvis \
+  --account andry
+```
+
+The command refuses to overwrite an existing file, creates a random 160-bit secret with
+mode `600`, and prints the sensitive `otpauth://` pairing URI once. Import that URI into an
+authenticator such as Aegis, 2FAS, or Google Authenticator without copying it into the
+repository or chat. The six-digit code changes every 30 seconds; the underlying secret
+does not rotate on every login.
+
+Enable the dashboard by passing only the host-side file path to the launcher:
+
+```bash
+JARVIS_DASHBOARD_TOTP_SECRET_FILE=/home/satellite/jarvis/.jarvis-dashboard-totp \
+JARVIS_HTTP_ALLOWED_ORIGINS=https://jarvis.dvdbnc.dpdns.org \
+JARVIS_DASHBOARD_TRUSTED_PROXY_PEERS=VERIFIED_PROXY_PEER_IP \
+./run-jarvis-http-main-v1.4.0.sh
+```
+
+Replace `VERIFIED_PROXY_PEER_IP` with the socket peer address actually used by the local
+Cloudflare/Docker proxy. Only requests from that exact peer may use Cloudflare's
+`CF-Connecting-IP` header for per-client login limiting; all other peers are keyed by their
+socket address and cannot spoof the header. Do not add broad subnets or public addresses.
+
+The launcher validates permissions and mounts the file read-only at
+`/run/secrets/jarvis-dashboard-totp`. A successful TOTP login creates an eight-hour
+`Secure`, `HttpOnly`, `SameSite=Strict`, `__Host-` session cookie. Each accepted TOTP time
+counter is single-use, so replaying the same temporary code cannot create another session.
+Repeated login failures are limited
+to five attempts per client per five-minute window. Host and Origin checks run before authentication,
+and protected responses use `Cache-Control: no-store`.
+
+The bundled launcher starts one Jarvis server process, matching the in-memory limiter and
+TOTP replay state. Do not add multiple HTTP workers without first replacing those stores
+with a shared deterministic backend.
+
+The failure limiter and used-TOTP counters reset when the process restarts. Dashboard
+sessions are stateless: logout removes the browser cookie but cannot revoke a token that
+was copied beforehand. Rotating the external TOTP secret invalidates every existing
+session when immediate global revocation is required.
 
 ### Password-protected note reading
 

@@ -194,6 +194,7 @@ STATUS_PAGE_HTML = """<!doctype html>
         <h1>Jarvis Core</h1>
       </div>
       <div class="header-actions">
+        <a class="notes-link" id="dashboard-link" href="/dashboard">Dashboard</a>
         <a class="notes-link" id="notes-link" href="/notes">Leggi note</a>
         <div class="connection" id="connection-state" role="status" aria-live="polite">
           <span class="connection-dot" aria-hidden="true"></span>
@@ -291,6 +292,9 @@ STATUS_PAGE_HTML = """<!doctype html>
         setText("note-count", data.note_count);
         if (data.web_note_reading_available) {
           document.getElementById("notes-link").classList.add("available");
+        }
+        if (data.dashboard_available) {
+          document.getElementById("dashboard-link").classList.add("available");
         }
         renderCards(data);
         setConnection("online", "Connesso");
