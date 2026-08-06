@@ -4,14 +4,14 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import tempfile
 import threading
 import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Iterator
+from typing import cast
 
 try:
     import fcntl
@@ -275,7 +275,9 @@ def search_vault(
     if len(cleaned_query) < 2:
         raise JarvisError("The search query must contain at least two characters.")
     if len(cleaned_query) > MAX_QUERY_CHARS:
-        raise JarvisError(f"The search query cannot exceed {MAX_QUERY_CHARS} characters.")
+        raise JarvisError(
+            f"The search query cannot exceed {MAX_QUERY_CHARS} characters."
+        )
     limit = _validate_limit(max_results)
 
     needle = cleaned_query.casefold()
@@ -356,9 +358,13 @@ def list_tasks_in_vault(root: Path, max_results: int = 100) -> dict[str, object]
 
 def recent_notes(root: Path, max_results: int = 20) -> dict[str, object]:
     limit = _validate_limit(max_results, maximum=MAX_LIST_LIMIT)
-    notes = sorted(_markdown_files(root), key=lambda path: path.stat().st_mtime, reverse=True)
+    notes = sorted(
+        _markdown_files(root), key=lambda path: path.stat().st_mtime, reverse=True
+    )
     return {
-        "notes": [_note_metadata(root, note, include_hash=False) for note in notes[:limit]],
+        "notes": [
+            _note_metadata(root, note, include_hash=False) for note in notes[:limit]
+        ],
         "limit_reached": len(notes) > limit,
     }
 
@@ -466,9 +472,7 @@ def list_note_versions(
         if not candidate.exists() or candidate.is_symlink() or not candidate.is_file():
             continue
         try:
-            _reject_symlink_ancestors(
-                state, ("versions", version_dir.name, *parts)
-            )
+            _reject_symlink_ancestors(state, ("versions", version_dir.name, *parts))
             snapshot = _ensure_inside(state, candidate, strict=True)
             data = _read_note_bytes(snapshot)
         except JarvisError:
@@ -498,7 +502,9 @@ def read_note_version(
     data = _read_note_bytes(snapshot)
     return {
         "version_id": _validate_version_id(version_id),
-        "path": PurePosixPath(*_validate_relative_parts(relative_path, markdown=True)).as_posix(),
+        "path": PurePosixPath(
+            *_validate_relative_parts(relative_path, markdown=True)
+        ).as_posix(),
         "sha256": _sha256_bytes(data),
         "size_bytes": len(data),
         "content": _decode_note(data),
@@ -546,7 +552,9 @@ def create_note_in_vault(
     target = _new_note_target(root, relative_path)
     with _mutation_lock(state):
         if target.exists():
-            raise JarvisError("The target note already exists; it will not be overwritten.")
+            raise JarvisError(
+                "The target note already exists; it will not be overwritten."
+            )
         target.parent.mkdir(parents=True, exist_ok=True)
         _reject_symlink_ancestors(root, target.relative_to(root).parts)
         with target.open("xb") as handle:
@@ -734,7 +742,9 @@ def move_note_in_vault(
         current_data = _read_note_bytes(source)
         before_hash = _verify_expected_hash(current_data, expected_sha256)
         if destination.exists():
-            raise JarvisError("The destination already exists; it will not be overwritten.")
+            raise JarvisError(
+                "The destination already exists; it will not be overwritten."
+            )
         backup_path = _snapshot_note(state, root, source, current_data)
         latest_data = _read_note_bytes(source)
         if _sha256_bytes(latest_data) != before_hash:
@@ -981,9 +991,7 @@ def capture_material(
             },
         )
     result = _capture_metadata(data, record)
-    result.update(
-        {"created": True, "duplicate": False, "audit_event_id": event_id}
-    )
+    result.update({"created": True, "duplicate": False, "audit_event_id": event_id})
     return result
 
 
@@ -1044,9 +1052,7 @@ def read_capture(state: Path, capture_id: str) -> dict[str, object]:
     return result
 
 
-def read_pending_captures(
-    state: Path, max_results: int = 10
-) -> dict[str, object]:
+def read_pending_captures(state: Path, max_results: int = 10) -> dict[str, object]:
     """Read a bounded batch of pending captures without changing their status."""
     limit = _validate_limit(max_results, maximum=MAX_TRIAGE_BATCH_RESULTS)
     listed = list_captures(state, "pending", limit)
@@ -1054,7 +1060,7 @@ def read_pending_captures(
     total_content_bytes = 0
     stopped_for_size = False
 
-    for metadata in listed["captures"]:
+    for metadata in cast(list[dict[str, object]], listed["captures"]):
         _, data, record = _read_capture_record(state, str(metadata["capture_id"]))
         content = record["content"]
         if not isinstance(content, str):
@@ -1090,11 +1096,7 @@ def update_capture_status(
     if not isinstance(status, str) or status not in CAPTURE_STATUSES:
         allowed = ", ".join(sorted(CAPTURE_STATUSES))
         raise JarvisError(f"status must be one of: {allowed}.")
-    if (
-        not isinstance(summary, str)
-        or not summary.strip()
-        or len(summary) > 2_000
-    ):
+    if not isinstance(summary, str) or not summary.strip() or len(summary) > 2_000:
         raise JarvisError(
             "summary must be non-empty text containing at most 2000 characters."
         )
@@ -1109,7 +1111,9 @@ def update_capture_status(
         if relative not in normalized_paths:
             normalized_paths.append(relative)
     if status == "processed" and not normalized_paths:
-        raise JarvisError("A processed capture must reference at least one output note.")
+        raise JarvisError(
+            "A processed capture must reference at least one output note."
+        )
     if status != "processed" and normalized_paths:
         raise JarvisError("Only processed captures can reference output notes.")
     if not isinstance(expected_record_sha256, str) or not re.fullmatch(
@@ -1124,7 +1128,7 @@ def update_capture_status(
             raise JarvisError(
                 "The capture changed since it was read. Read it again before updating it."
             )
-        before_status = record["status"]
+        before_status = cast(str, record["status"])
         allowed_transitions = CAPTURE_STATUS_TRANSITIONS.get(before_status, set())
         if status not in allowed_transitions:
             raise JarvisError(

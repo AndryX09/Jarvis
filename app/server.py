@@ -4,20 +4,12 @@ import hmac
 import ipaddress
 import logging
 import os
-from pathlib import Path
 import time
+from pathlib import Path
+from typing import cast
 from urllib.parse import parse_qs
 
-from mcp.server.fastmcp import FastMCP
-from mcp.server.auth.provider import AccessToken
-from mcp.server.auth.settings import AuthSettings
-from mcp.server.transport_security import (
-    TransportSecurityMiddleware,
-    TransportSecuritySettings,
-)
-from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-
+import vault_core
 from dashboard_auth import (
     create_session_token,
     load_totp_secret,
@@ -25,39 +17,22 @@ from dashboard_auth import (
     validate_session_token,
 )
 from dashboard_page import DASHBOARD_PAGE_HTML, LOGIN_PAGE_HTML
+from dotenv import load_dotenv
+from mcp.server.auth.provider import AccessToken
+from mcp.server.auth.settings import AuthSettings
+from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import (
+    TransportSecurityMiddleware,
+    TransportSecuritySettings,
+)
 from notes_page import NOTES_PAGE_HTML
 from runtime_config import load_runtime_config
+from starlette.requests import Request
+from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from status_page import STATUS_PAGE_HTML
+from vault_core import JarvisError
 
-from vault_core import (
-    JarvisError,
-    append_to_note_in_vault,
-    capture_material as capture_material_in_state,
-    create_inbox_note as create_inbox_note_in_vault,
-    create_note_in_vault,
-    get_state_root,
-    get_vault_root,
-    ingestion_status as get_ingestion_status,
-    list_captures as list_captures_in_state,
-    list_notes_in_vault,
-    list_note_versions,
-    list_tasks_in_vault,
-    move_note_in_vault,
-    read_capture as read_capture_from_state,
-    read_pending_captures as read_pending_captures_from_state,
-    read_ingestion_policy as read_ingestion_policy_from_vault,
-    read_organization_policy as read_organization_policy_from_vault,
-    read_note_from_vault,
-    read_note_version,
-    recent_activity as get_recent_activity,
-    recent_notes as get_recent_notes,
-    restore_note_version,
-    search_vault,
-    update_note_in_vault,
-    update_capture_status as update_capture_status_in_state,
-    vault_status as get_vault_status,
-)
-
+load_dotenv()
 
 WEB_NOTE_RESPONSE_HEADERS = {
     "Cache-Control": "no-store",
@@ -116,8 +91,8 @@ def _authentication_required() -> Response:
 
 
 LOGGER = logging.getLogger(__name__)
-VAULT_ROOT = get_vault_root()
-STATE_ROOT = get_state_root()
+VAULT_ROOT = vault_core.get_vault_root()
+STATE_ROOT = vault_core.get_state_root()
 RUNTIME_CONFIG = load_runtime_config(os.environ)
 WEB_NOTE_PASSWORD = (
     _load_web_note_password(RUNTIME_CONFIG.web_note_password_file)
@@ -138,9 +113,7 @@ MCP_TRANSPORT_SECURITY_SETTINGS = TransportSecuritySettings(
     enable_dns_rebinding_protection=True,
     allowed_hosts=list(RUNTIME_CONFIG.mcp_allowed_hosts),
 )
-MCP_TOKEN_VERIFIER = (
-    None if RUNTIME_CONFIG.http_mcp_enabled else _RejectAllMcpTokens()
-)
+MCP_TOKEN_VERIFIER = None if RUNTIME_CONFIG.http_mcp_enabled else _RejectAllMcpTokens()
 MCP_AUTH_SETTINGS = (
     None
     if RUNTIME_CONFIG.http_mcp_enabled
@@ -150,9 +123,7 @@ MCP_AUTH_SETTINGS = (
         required_scopes=[],
     )
 )
-STATUS_ROUTE_SECURITY = TransportSecurityMiddleware(
-    STATUS_TRANSPORT_SECURITY_SETTINGS
-)
+STATUS_ROUTE_SECURITY = TransportSecurityMiddleware(STATUS_TRANSPORT_SECURITY_SETTINGS)
 
 mcp = FastMCP(
     "Jarvis Core v1.4.0",
@@ -188,9 +159,7 @@ def _safe(callable_, *args, **kwargs) -> dict[str, object]:
 
 def _web_note_access_error(request: Request) -> Response | None:
     if WEB_NOTE_PASSWORD is None:
-        return Response(
-            "Not Found", status_code=404, headers=WEB_NOTE_RESPONSE_HEADERS
-        )
+        return Response("Not Found", status_code=404, headers=WEB_NOTE_RESPONSE_HEADERS)
     authorization = request.headers.get("authorization", "")
     if len(authorization) > 8192:
         return _authentication_required()
@@ -246,7 +215,9 @@ def _dashboard_login_key(request: Request) -> str:
 def _dashboard_login_failures(key: str, now: float) -> list[float]:
     cutoff = now - DASHBOARD_LOGIN_WINDOW_SECONDS
     for existing_key, existing_failures in tuple(DASHBOARD_LOGIN_FAILURES.items()):
-        current = [attempted_at for attempted_at in existing_failures if attempted_at >= cutoff]
+        current = [
+            attempted_at for attempted_at in existing_failures if attempted_at >= cutoff
+        ]
         if current:
             DASHBOARD_LOGIN_FAILURES[existing_key] = current
         else:
@@ -292,7 +263,7 @@ async def status_api(request: Request) -> Response:
     if validation_error is not None:
         return validation_error
     try:
-        status = get_vault_status(VAULT_ROOT, STATE_ROOT)
+        status = vault_core.vault_status(VAULT_ROOT, STATE_ROOT)
     except (JarvisError, OSError, UnicodeError):
         LOGGER.exception("Unable to collect Jarvis status for the public status API")
         return JSONResponse({"error": "Jarvis status unavailable"}, status_code=503)
@@ -317,7 +288,9 @@ async def dashboard_page(request: Request) -> Response:
     if validation_error is not None:
         return validation_error
     if DASHBOARD_TOTP_SECRET is None:
-        return Response("Not Found", status_code=404, headers=DASHBOARD_RESPONSE_HEADERS)
+        return Response(
+            "Not Found", status_code=404, headers=DASHBOARD_RESPONSE_HEADERS
+        )
     if not _dashboard_session_valid(request):
         return RedirectResponse(
             "/login", status_code=303, headers=DASHBOARD_RESPONSE_HEADERS
@@ -332,17 +305,26 @@ async def dashboard_status_api(request: Request) -> Response:
     if validation_error is not None:
         return validation_error
     if DASHBOARD_TOTP_SECRET is None:
-        return Response("Not Found", status_code=404, headers=DASHBOARD_RESPONSE_HEADERS)
+        return Response(
+            "Not Found", status_code=404, headers=DASHBOARD_RESPONSE_HEADERS
+        )
     if not _dashboard_session_valid(request):
         return JSONResponse(
             {"error": "Authentication required"},
             status_code=401,
             headers=DASHBOARD_RESPONSE_HEADERS,
         )
+    raw_core: dict[str, object]
+    raw_ingestion: dict[str, object]
+    raw_activity: list[dict[str, object]]
+
     try:
-        raw_core = get_vault_status(VAULT_ROOT, STATE_ROOT)
-        raw_ingestion = get_ingestion_status(VAULT_ROOT, STATE_ROOT)
-        raw_activity = get_recent_activity(STATE_ROOT, 20)["events"]
+        raw_core = vault_core.vault_status(VAULT_ROOT, STATE_ROOT)
+        raw_ingestion = vault_core.ingestion_status(VAULT_ROOT, STATE_ROOT)
+        raw_activity = cast(
+            list[dict[str, object]],
+            vault_core.recent_activity(STATE_ROOT, 20)["events"],
+        )
     except (JarvisError, OSError, UnicodeError):
         LOGGER.exception("Unable to build the read-only dashboard status")
         return JSONResponse(
@@ -362,11 +344,7 @@ async def dashboard_status_api(request: Request) -> Response:
     )
     capture_count_keys = ("total", "pending", "ready", "processed", "skipped")
     activity = [
-        {
-            key: event[key]
-            for key in ("action", "timestamp_utc")
-            if key in event
-        }
+        {key: event[key] for key in ("action", "timestamp_utc") if key in event}
         for event in raw_activity
         if isinstance(event, dict)
     ]
@@ -377,9 +355,7 @@ async def dashboard_status_api(request: Request) -> Response:
                 "captures": {
                     key: raw_ingestion["captures"][key] for key in capture_count_keys
                 },
-                "raw_material_is_preserved": raw_ingestion[
-                    "raw_material_is_preserved"
-                ],
+                "raw_material_is_preserved": raw_ingestion["raw_material_is_preserved"],
                 "automatic_deletion_available": raw_ingestion[
                     "automatic_deletion_available"
                 ],
@@ -401,12 +377,17 @@ async def dashboard_login_page(request: Request) -> Response:
     if validation_error is not None:
         return validation_error
     if DASHBOARD_TOTP_SECRET is None:
-        return Response("Not Found", status_code=404, headers=DASHBOARD_RESPONSE_HEADERS)
+        return Response(
+            "Not Found", status_code=404, headers=DASHBOARD_RESPONSE_HEADERS
+        )
     if request.method == "GET":
         return HTMLResponse(LOGIN_PAGE_HTML, headers=DASHBOARD_RESPONSE_HEADERS)
     login_key = _dashboard_login_key(request)
     monotonic_now = time.monotonic()
-    if len(_dashboard_login_failures(login_key, monotonic_now)) >= DASHBOARD_LOGIN_MAX_FAILURES:
+    if (
+        len(_dashboard_login_failures(login_key, monotonic_now))
+        >= DASHBOARD_LOGIN_MAX_FAILURES
+    ):
         return Response(
             "Too many attempts",
             status_code=429,
@@ -415,19 +396,23 @@ async def dashboard_login_page(request: Request) -> Response:
                 "Retry-After": str(DASHBOARD_LOGIN_WINDOW_SECONDS),
             },
         )
-    if not request.headers.get("content-type", "").casefold().startswith(
-        "application/x-www-form-urlencoded"
+    if (
+        not request.headers.get("content-type", "")
+        .casefold()
+        .startswith("application/x-www-form-urlencoded")
     ):
         _record_dashboard_login_failure(login_key, monotonic_now)
-        return Response("Invalid request", status_code=400, headers=DASHBOARD_RESPONSE_HEADERS)
+        return Response(
+            "Invalid request", status_code=400, headers=DASHBOARD_RESPONSE_HEADERS
+        )
     body = await _read_limited_request_body(request, 1024)
     if body is None:
         _record_dashboard_login_failure(login_key, monotonic_now)
-        return Response("Invalid request", status_code=400, headers=DASHBOARD_RESPONSE_HEADERS)
-    try:
-        fields = parse_qs(
-            body.decode("ascii"), strict_parsing=True, max_num_fields=2
+        return Response(
+            "Invalid request", status_code=400, headers=DASHBOARD_RESPONSE_HEADERS
         )
+    try:
+        fields = parse_qs(body.decode("ascii"), strict_parsing=True, max_num_fields=2)
         codes = fields["code"]
     except (KeyError, UnicodeDecodeError, ValueError):
         code = ""
@@ -470,7 +455,9 @@ async def dashboard_logout(request: Request) -> Response:
     if validation_error is not None:
         return validation_error
     if DASHBOARD_TOTP_SECRET is None:
-        return Response("Not Found", status_code=404, headers=DASHBOARD_RESPONSE_HEADERS)
+        return Response(
+            "Not Found", status_code=404, headers=DASHBOARD_RESPONSE_HEADERS
+        )
     response = RedirectResponse(
         "/login", status_code=303, headers=DASHBOARD_RESPONSE_HEADERS
     )
@@ -525,7 +512,7 @@ async def notes_api(request: Request) -> Response:
             if RUNTIME_CONFIG.web_note_scope == "panoramas"
             else None
         )
-        listed = list_notes_in_vault(
+        listed = vault_core.list_notes_in_vault(
             VAULT_ROOT,
             "",
             WEB_NOTE_PAGE_SIZE,
@@ -571,7 +558,7 @@ async def note_api(request: Request) -> Response:
             "Note not available", status_code=404, headers=WEB_NOTE_RESPONSE_HEADERS
         )
     try:
-        note = read_note_from_vault(VAULT_ROOT, path)
+        note = vault_core.read_note_from_vault(VAULT_ROOT, path)
     except JarvisError:
         return Response(
             "Note not available", status_code=404, headers=WEB_NOTE_RESPONSE_HEADERS
@@ -597,67 +584,67 @@ async def note_api(request: Request) -> Response:
 @mcp.tool()
 def jarvis_status() -> dict[str, object]:
     """Show Jarvis Core version, vault mode, note count, and safety capabilities."""
-    return _safe(get_vault_status, VAULT_ROOT, STATE_ROOT)
+    return _safe(vault_core.vault_status, VAULT_ROOT, STATE_ROOT)
 
 
 @mcp.tool()
 def list_notes(folder: str = "", max_results: int = 100) -> dict[str, object]:
     """List visible Markdown notes in the vault or one vault-relative folder."""
-    return _safe(list_notes_in_vault, VAULT_ROOT, folder, max_results)
+    return _safe(vault_core.list_notes_in_vault, VAULT_ROOT, folder, max_results)
 
 
 @mcp.tool()
 def search_notes(query: str, max_results: int = 20) -> dict[str, object]:
     """Search visible Markdown notes for literal case-insensitive text."""
-    return _safe(search_vault, VAULT_ROOT, query, max_results)
+    return _safe(vault_core.search_vault, VAULT_ROOT, query, max_results)
 
 
 @mcp.tool()
 def read_note(path: str) -> dict[str, object]:
     """Read one Markdown note and return its content and sha256 revision token."""
-    return _safe(read_note_from_vault, VAULT_ROOT, path)
+    return _safe(vault_core.read_note_from_vault, VAULT_ROOT, path)
 
 
 @mcp.tool()
 def list_versions(path: str, max_results: int = 20) -> dict[str, object]:
     """List saved versions of one note without returning their contents."""
-    return _safe(list_note_versions, STATE_ROOT, path, max_results)
+    return _safe(vault_core.list_note_versions, STATE_ROOT, path, max_results)
 
 
 @mcp.tool()
 def read_version(path: str, version_id: str) -> dict[str, object]:
     """Read one saved version and return its content and sha256 verification token."""
-    return _safe(read_note_version, STATE_ROOT, path, version_id)
+    return _safe(vault_core.read_note_version, STATE_ROOT, path, version_id)
 
 
 @mcp.tool()
 def list_tasks(max_results: int = 100) -> dict[str, object]:
     """List unchecked Markdown tasks from visible notes."""
-    return _safe(list_tasks_in_vault, VAULT_ROOT, max_results)
+    return _safe(vault_core.list_tasks_in_vault, VAULT_ROOT, max_results)
 
 
 @mcp.tool()
 def recent_notes(max_results: int = 20) -> dict[str, object]:
     """List the most recently modified visible Markdown notes."""
-    return _safe(get_recent_notes, VAULT_ROOT, max_results)
+    return _safe(vault_core.recent_notes, VAULT_ROOT, max_results)
 
 
 @mcp.tool()
 def ingestion_status() -> dict[str, object]:
     """Show capture counts and whether the acquisition and triage policy is available."""
-    return _safe(get_ingestion_status, VAULT_ROOT, STATE_ROOT)
+    return _safe(vault_core.ingestion_status, VAULT_ROOT, STATE_ROOT)
 
 
 @mcp.tool()
 def read_ingestion_policy() -> dict[str, object]:
     """Read the user-authored rules for acquisition, triage, and capture states."""
-    return _safe(read_ingestion_policy_from_vault, VAULT_ROOT)
+    return _safe(vault_core.read_ingestion_policy, VAULT_ROOT)
 
 
 @mcp.tool()
 def read_organization_policy() -> dict[str, object]:
     """Read the user-authored rules for conversation and note organization."""
-    return _safe(read_organization_policy_from_vault, VAULT_ROOT)
+    return _safe(vault_core.read_organization_policy, VAULT_ROOT)
 
 
 @mcp.tool()
@@ -672,7 +659,7 @@ def capture_material(
 ) -> dict[str, object]:
     """Preserve raw text in the ingestion queue; exact duplicates are not stored twice."""
     return _safe(
-        capture_material_in_state,
+        vault_core.capture_material,
         STATE_ROOT,
         title,
         content,
@@ -685,23 +672,21 @@ def capture_material(
 
 
 @mcp.tool()
-def list_captures(
-    status: str = "pending", max_results: int = 20
-) -> dict[str, object]:
+def list_captures(status: str = "pending", max_results: int = 20) -> dict[str, object]:
     """List capture metadata without returning the raw content."""
-    return _safe(list_captures_in_state, STATE_ROOT, status, max_results)
+    return _safe(vault_core.list_captures, STATE_ROOT, status, max_results)
 
 
 @mcp.tool()
 def read_capture(capture_id: str) -> dict[str, object]:
     """Read one preserved capture and return its record_sha256 revision token."""
-    return _safe(read_capture_from_state, STATE_ROOT, capture_id)
+    return _safe(vault_core.read_capture, STATE_ROOT, capture_id)
 
 
 @mcp.tool()
 def read_pending_captures(max_results: int = 10) -> dict[str, object]:
     """Read up to 20 pending captures for bounded batch triage without changing them."""
-    return _safe(read_pending_captures_from_state, STATE_ROOT, max_results)
+    return _safe(vault_core.read_pending_captures, STATE_ROOT, max_results)
 
 
 @mcp.tool()
@@ -714,7 +699,7 @@ def update_capture_status(
 ) -> dict[str, object]:
     """Apply an allowed capture-state transition with fresh hash and non-empty summary."""
     return _safe(
-        update_capture_status_in_state,
+        vault_core.update_capture_status,
         VAULT_ROOT,
         STATE_ROOT,
         capture_id,
@@ -728,20 +713,20 @@ def update_capture_status(
 @mcp.tool()
 def create_note(path: str, content: str) -> dict[str, object]:
     """Create a new Markdown note. Existing files are never overwritten."""
-    return _safe(create_note_in_vault, VAULT_ROOT, STATE_ROOT, path, content)
+    return _safe(vault_core.create_note_in_vault, VAULT_ROOT, STATE_ROOT, path, content)
 
 
 @mcp.tool()
 def create_inbox_note(title: str, content: str) -> dict[str, object]:
     """Create a timestamped note in the dedicated AI Inbox folder."""
-    return _safe(create_inbox_note_in_vault, VAULT_ROOT, STATE_ROOT, title, content)
+    return _safe(vault_core.create_inbox_note, VAULT_ROOT, STATE_ROOT, title, content)
 
 
 @mcp.tool()
 def append_to_note(path: str, content: str, expected_sha256: str) -> dict[str, object]:
     """Append text after verifying the sha256 returned by a fresh read_note call."""
     return _safe(
-        append_to_note_in_vault,
+        vault_core.append_to_note_in_vault,
         VAULT_ROOT,
         STATE_ROOT,
         path,
@@ -754,7 +739,7 @@ def append_to_note(path: str, content: str, expected_sha256: str) -> dict[str, o
 def update_note(path: str, content: str, expected_sha256: str) -> dict[str, object]:
     """Replace one note after revision verification and preserve its previous version."""
     return _safe(
-        update_note_in_vault,
+        vault_core.update_note_in_vault,
         VAULT_ROOT,
         STATE_ROOT,
         path,
@@ -772,7 +757,7 @@ def restore_version(
 ) -> dict[str, object]:
     """Restore a saved version after verifying both current and saved revision hashes."""
     return _safe(
-        restore_note_version,
+        vault_core.restore_note_version,
         VAULT_ROOT,
         STATE_ROOT,
         path,
@@ -788,7 +773,7 @@ def move_note(
 ) -> dict[str, object]:
     """Move a note inside the vault without overwriting an existing destination."""
     return _safe(
-        move_note_in_vault,
+        vault_core.move_note_in_vault,
         VAULT_ROOT,
         STATE_ROOT,
         source_path,
@@ -800,7 +785,7 @@ def move_note(
 @mcp.tool()
 def recent_activity(max_results: int = 20) -> dict[str, object]:
     """Return recent mutation audit metadata without note contents."""
-    return _safe(get_recent_activity, STATE_ROOT, max_results)
+    return _safe(vault_core.recent_activity, STATE_ROOT, max_results)
 
 
 def run_server() -> None:

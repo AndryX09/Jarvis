@@ -43,6 +43,7 @@ audit.jsonl.*
 # --- Secrets and credentials (NEVER commit) ----------------------------
 .env
 .env.*
+!.env.example
 *.pem
 *.key
 *.crt
