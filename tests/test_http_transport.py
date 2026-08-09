@@ -11,6 +11,7 @@ import time
 import unittest
 from pathlib import Path
 
+import httpx
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
@@ -157,8 +158,11 @@ class StreamableHttpIntegrationTests(unittest.TestCase):
             temporary_root = Path(temporary)
             vault = temporary_root / "vault"
             state = temporary_root / "state"
+            token_file = temporary_root / "mcp-token"
+            token = "A" * 43
             vault.mkdir()
             state.mkdir()
+            token_file.write_text(token, encoding="ascii")
             port = _unused_loopback_port()
             env = os.environ.copy()
             env.update(
@@ -171,6 +175,7 @@ class StreamableHttpIntegrationTests(unittest.TestCase):
                     "JARVIS_HTTP_PORT": str(port),
                     "JARVIS_HTTP_ALLOWED_HOSTS": "127.0.0.1:*",
                     "JARVIS_HTTP_MCP_ENABLED": "true",
+                    "JARVIS_MCP_BEARER_TOKEN_FILE": str(token_file),
                 }
             )
             process = subprocess.Popen(
@@ -183,7 +188,9 @@ class StreamableHttpIntegrationTests(unittest.TestCase):
             )
             try:
                 _wait_for_listener(process, port)
-                asyncio.run(self._exercise_server(port))
+                self.assertEqual(self._initialize_status(port, None), 401)
+                self.assertEqual(self._initialize_status(port, "B" * 43), 401)
+                asyncio.run(self._exercise_server(port, token))
             finally:
                 process.terminate()
                 try:
@@ -220,19 +227,53 @@ class StreamableHttpIntegrationTests(unittest.TestCase):
             )
             asyncio.run(self._exercise_stdio(parameters))
 
-    async def _exercise_server(self, port: int) -> None:
-        url = f"http://127.0.0.1:{port}/mcp"
-        async with streamable_http_client(url) as (read, write, _session_id):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                listed = await session.list_tools()
-                names = [tool.name for tool in listed.tools]
-                self.assertEqual(len(names), 23)
-                self.assertFalse(any("delete" in name.lower() for name in names))
+    def _initialize_status(self, port: int, token: str | None) -> int:
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        }
+        if token is not None:
+            headers["Authorization"] = f"Bearer {token}"
+        body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "auth-test", "version": "1"},
+                },
+            }
+        )
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        connection.request("POST", "/mcp", body=body, headers=headers)
+        response = connection.getresponse()
+        status = response.status
+        response.read()
+        connection.close()
+        return status
 
-                status = await session.call_tool("jarvis_status", {})
-                self.assertFalse(status.isError)
-                self.assertIn("1.4.0", str(status.structuredContent))
+    async def _exercise_server(self, port: int, token: str) -> None:
+        url = f"http://127.0.0.1:{port}/mcp"
+        async with httpx.AsyncClient(
+            headers={"Authorization": f"Bearer {token}"}
+        ) as http_client:
+            async with streamable_http_client(url, http_client=http_client) as (
+                read,
+                write,
+                _session_id,
+            ):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    listed = await session.list_tools()
+                    names = [tool.name for tool in listed.tools]
+                    self.assertEqual(len(names), 23)
+                    self.assertFalse(any("delete" in name.lower() for name in names))
+
+                    status = await session.call_tool("jarvis_status", {})
+                    self.assertFalse(status.isError)
+                    self.assertIn("1.4.0", str(status.structuredContent))
 
     async def _exercise_stdio(self, parameters: StdioServerParameters) -> None:
         async with stdio_client(parameters) as (read, write):

@@ -18,6 +18,7 @@ from dashboard_auth import (
 )
 from dashboard_page import DASHBOARD_PAGE_HTML, LOGIN_PAGE_HTML
 from dotenv import load_dotenv
+from mcp_auth import StaticBearerTokenVerifier, load_mcp_bearer_token
 from mcp.server.auth.provider import AccessToken
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
@@ -94,6 +95,11 @@ LOGGER = logging.getLogger(__name__)
 VAULT_ROOT = vault_core.get_vault_root()
 STATE_ROOT = vault_core.get_state_root()
 RUNTIME_CONFIG = load_runtime_config(os.environ)
+MCP_BEARER_TOKEN = (
+    load_mcp_bearer_token(RUNTIME_CONFIG.mcp_bearer_token_file)
+    if RUNTIME_CONFIG.http_mcp_enabled
+    else None
+)
 WEB_NOTE_PASSWORD = (
     _load_web_note_password(RUNTIME_CONFIG.web_note_password_file)
     if RUNTIME_CONFIG.web_note_scope != "none"
@@ -113,15 +119,15 @@ MCP_TRANSPORT_SECURITY_SETTINGS = TransportSecuritySettings(
     enable_dns_rebinding_protection=True,
     allowed_hosts=list(RUNTIME_CONFIG.mcp_allowed_hosts),
 )
-MCP_TOKEN_VERIFIER = None if RUNTIME_CONFIG.http_mcp_enabled else _RejectAllMcpTokens()
-MCP_AUTH_SETTINGS = (
-    None
-    if RUNTIME_CONFIG.http_mcp_enabled
-    else AuthSettings(
-        issuer_url="http://127.0.0.1",
-        resource_server_url=None,
-        required_scopes=[],
-    )
+MCP_TOKEN_VERIFIER = (
+    StaticBearerTokenVerifier(MCP_BEARER_TOKEN)
+    if MCP_BEARER_TOKEN is not None
+    else _RejectAllMcpTokens()
+)
+MCP_AUTH_SETTINGS = AuthSettings(
+    issuer_url="http://127.0.0.1",
+    resource_server_url=None,
+    required_scopes=[],
 )
 STATUS_ROUTE_SECURITY = TransportSecurityMiddleware(STATUS_TRANSPORT_SECURITY_SETTINGS)
 

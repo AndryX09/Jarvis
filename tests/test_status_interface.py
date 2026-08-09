@@ -67,6 +67,9 @@ def _running_http_server(
         (vault / "Idea.md").write_text("# Idea\n", encoding="utf-8")
         password_file = temporary_root / "web-note-password"
         totp_secret_file = temporary_root / "dashboard-totp-secret"
+        mcp_token_file = temporary_root / "mcp-token"
+        if http_mcp_enabled:
+            mcp_token_file.write_text("A" * 43, encoding="ascii")
         if dashboard_enabled:
             totp_secret_file.write_text(
                 "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ\n",
@@ -134,6 +137,8 @@ def _running_http_server(
             )
         if dashboard_enabled:
             env["JARVIS_DASHBOARD_TOTP_SECRET_FILE"] = str(totp_secret_file)
+        if http_mcp_enabled:
+            env["JARVIS_MCP_BEARER_TOKEN_FILE"] = str(mcp_token_file)
         if dashboard_trusted_proxy_peer is not None:
             env["JARVIS_DASHBOARD_TRUSTED_PROXY_PEERS"] = dashboard_trusted_proxy_peer
         elif dashboard_trusted_proxy:
