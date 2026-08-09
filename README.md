@@ -97,24 +97,33 @@ JARVIS_HTTP_ALLOWED_HOSTS=127.0.0.1:*,localhost:*
 JARVIS_HTTP_ALLOWED_ORIGINS=http://127.0.0.1:*,http://localhost:*
 JARVIS_MCP_ALLOWED_HOSTS=127.0.0.1:*,localhost:*
 JARVIS_HTTP_MCP_ENABLED=false
+JARVIS_MCP_BEARER_TOKEN_FILE=/home/satellite/jarvis/.jarvis-mcp-token
 ```
 
-When explicitly enabled, the MCP endpoint is `http://127.0.0.1:8765/mcp`. The port must
-be between 1 and 65535. Unknown transports and an empty HTTP host allowlist are rejected
-before startup.
+When explicitly enabled on the example loopback configuration, the MCP endpoint is
+`http://127.0.0.1:8765/mcp`. The port must be between 1 and 65535. Unknown transports
+and empty HTTP allowlists are rejected before startup.
 DNS rebinding protection is enabled by FastMCP. `JARVIS_HTTP_ALLOWED_HOSTS` controls the
 read-only browser routes, while the narrower `JARVIS_MCP_ALLOWED_HOSTS` independently
 controls the write-capable `/mcp` endpoint. `JARVIS_HTTP_MCP_ENABLED` is `false` by
 default and makes `/mcp` reject every request regardless of how a proxy rewrites Host;
-stdio remains available. A public hostname may be added to the browser allowlist without
-adding it to the MCP allowlist or enabling MCP over HTTP.
+stdio remains available.
+
+Setting `JARVIS_HTTP_MCP_ENABLED=true` also requires
+`JARVIS_MCP_BEARER_TOKEN_FILE`. The file must be external to the repository, must not be
+a symbolic link, and must contain one ASCII token of at least 32 bytes. Requests without
+the HTTP Bearer authorization header, or with a mismatched token, receive
+`401 Unauthorized`. Never put the token value in Git, logs, command arguments, HTML, or
+Markdown. A public hostname may be added to the browser allowlist without adding it to
+the MCP allowlist; direct HTTPS MCP additionally requires that hostname in
+`JARVIS_MCP_ALLOWED_HOSTS` and the Bearer token.
 
 The same HTTP server exposes a dependency-free, read-only status interface at `/` and
 its JSON data source at `/api/status`. The page displays the safe operational metadata
 returned by `jarvis_status`; it does not expose note contents, capture contents, or
-mutation controls. Host and Origin validation still applies, but `/mcp` has the separate,
-loopback-only host allowlist described above. Set `JARVIS_HTTP_MCP_ENABLED=true` only for
-an explicitly reviewed local HTTP client that also matches `JARVIS_MCP_ALLOWED_HOSTS`.
+mutation controls. Host and Origin validation still applies, but `/mcp` has the separate
+host allowlist described above. Enable MCP only for an authenticated client that
+also matches `JARVIS_MCP_ALLOWED_HOSTS`.
 
 ### TOTP-protected process dashboard
 
