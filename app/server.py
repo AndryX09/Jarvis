@@ -322,11 +322,13 @@ async def dashboard_status_api(request: Request) -> Response:
         )
     raw_core: dict[str, object]
     raw_ingestion: dict[str, object]
+    raw_watcher: dict[str, object]
     raw_activity: list[dict[str, object]]
 
     try:
         raw_core = vault_core.vault_status(VAULT_ROOT, STATE_ROOT)
         raw_ingestion = vault_core.ingestion_status(VAULT_ROOT, STATE_ROOT)
+        raw_watcher = vault_core.watcher_status(STATE_ROOT)
         raw_activity = cast(
             list[dict[str, object]],
             vault_core.recent_activity(STATE_ROOT, 20)["events"],
@@ -366,6 +368,7 @@ async def dashboard_status_api(request: Request) -> Response:
                     "automatic_deletion_available"
                 ],
             },
+            "watcher": raw_watcher,
             "security": {
                 "http_mcp_enabled": RUNTIME_CONFIG.http_mcp_enabled,
                 "dashboard_mode": "read-only",

@@ -80,6 +80,7 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
     <section class="card"><h2>Note indicizzate</h2><p class="metric" id="note-count">—</p><p class="muted">Solo metadati; nessun contenuto esposto</p></section>
     <section class="card"><h2>Eventi audit</h2><p class="metric" id="audit-count">—</p><p class="muted">Registro delle operazioni Jarvis</p></section>
     <section class="card wide"><h2>Pipeline di acquisizione</h2><dl><dt>Totale</dt><dd id="capture-total">—</dd><dt>In attesa</dt><dd id="capture-pending">—</dd><dt>Pronte</dt><dd id="capture-ready">—</dd><dt>Elaborate</dt><dd id="capture-processed">—</dd></dl></section>
+    <section class="card wide"><h2>Watcher deterministico</h2><dl><dt>Stato</dt><dd id="watcher-state">—</dd><dt>Eventi</dt><dd id="watcher-events">—</dd><dt>Catture create</dt><dd id="watcher-captures">—</dd><dt>Da revisionare</dt><dd id="watcher-review">—</dd><dt>Errori</dt><dd id="watcher-errors">—</dd></dl></section>
     <section class="card"><h2>Sicurezza</h2><dl><dt>MCP HTTP</dt><dd id="mcp-http-state">In verifica</dd><dt>Cancellazione automatica</dt><dd>Assente</dd><dt>Dashboard</dt><dd>Read-only</dd></dl></section>
     <section class="card full"><h2>Attività recente</h2><ul id="activity"><li><span>Caricamento</span><time>—</time></li></ul></section>
   </main>
@@ -103,6 +104,11 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
         setText("capture-pending", data.ingestion.captures.pending);
         setText("capture-ready", data.ingestion.captures.ready);
         setText("capture-processed", data.ingestion.captures.processed);
+        setText("watcher-state", data.watcher.service);
+        setText("watcher-events", data.watcher.events_processed);
+        setText("watcher-captures", data.watcher.captures_created);
+        setText("watcher-review", data.watcher.review_required);
+        setText("watcher-errors", data.watcher.errors);
         setText("mcp-http-state", data.security.http_mcp_enabled ? "Abilitato" : "Bloccato");
         const activity = document.getElementById("activity");
         activity.replaceChildren();

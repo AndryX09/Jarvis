@@ -2,8 +2,13 @@ module.exports = {
   apps : [
     {
       name: "jarvis",
-      interpreter: "none",
-      script: ".venv/bin/python3 app/server.py",
+      interpreter: ".venv/bin/python3",
+      script: "app/server.py",
+    },
+    {
+      name: "jarvis-watcher",
+      interpreter: ".venv/bin/python3",
+      script: "app/watcher_service.py",
     },
   ],
 };

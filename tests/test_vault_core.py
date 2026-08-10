@@ -4,6 +4,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from app import vault_core as vault_core_module
 from app.vault_core import (
@@ -29,6 +30,7 @@ from app.vault_core import (
     update_note_in_vault,
     update_capture_status,
     vault_status,
+    watcher_status,
 )
 
 
@@ -273,6 +275,56 @@ class JarvisCoreTests(unittest.TestCase):
             status["policy_paths"]["ingestion"],
             "Sistema — Acquisizione e triage.md",
         )
+
+    def test_watcher_status_does_not_follow_symlink_swapped_before_read(self):
+        status_path = self.state / "watcher-service-status.json"
+        status_path.write_text(
+            json.dumps(
+                {
+                    "service": "stopped",
+                    "rule_version": "watcher-policy-v1",
+                    "last_poll_utc": "",
+                    "events_processed": 1,
+                    "captures_created": 0,
+                    "review_required": 0,
+                    "ignored": 0,
+                    "errors": 0,
+                }
+            ),
+            encoding="utf-8",
+        )
+        external = self.root / "external-status.json"
+        external.write_text(
+            json.dumps(
+                {
+                    "service": "EXTERNAL_SECRET",
+                    "rule_version": "external",
+                    "last_poll_utc": "",
+                    "events_processed": 999,
+                    "captures_created": 999,
+                    "review_required": 999,
+                    "ignored": 999,
+                    "errors": 999,
+                }
+            ),
+            encoding="utf-8",
+        )
+        original_read_text = Path.read_text
+
+        def swap_before_read(path, *args, **kwargs):
+            if path == status_path:
+                status_path.unlink()
+                try:
+                    os.symlink(external, status_path)
+                except (OSError, NotImplementedError):
+                    self.skipTest("symbolic links are unavailable")
+            return original_read_text(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "read_text", swap_before_read):
+            result = watcher_status(self.state)
+
+        self.assertNotEqual(result["service"], "EXTERNAL_SECRET")
+        self.assertNotEqual(result["events_processed"], 999)
 
     def test_ingestion_policy_reads_dedicated_policy_from_vault(self):
         organization_path = self.root / "Sistema — Gestione automatica delle note.md"

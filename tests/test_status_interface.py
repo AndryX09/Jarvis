@@ -480,6 +480,20 @@ class StatusInterfaceIntegrationTests(unittest.TestCase):
             {"total", "pending", "ready", "processed", "skipped"},
         )
         self.assertEqual(payload["ingestion"]["captures"]["total"], 0)
+        self.assertEqual(
+            set(payload["watcher"]),
+            {
+                "service",
+                "rule_version",
+                "last_poll_utc",
+                "events_processed",
+                "captures_created",
+                "review_required",
+                "ignored",
+                "errors",
+            },
+        )
+        self.assertEqual(payload["watcher"]["service"], "not-running")
         self.assertFalse(payload["security"]["http_mcp_enabled"])
         self.assertEqual(
             payload["activity"],
@@ -522,6 +536,7 @@ class StatusInterfaceIntegrationTests(unittest.TestCase):
         self.assertIn("Processi Jarvis", html)
         self.assertIn("Sola lettura", html)
         self.assertIn('id="mcp-http-state"', html)
+        self.assertIn('id="watcher-state"', html)
         self.assertIn("http_mcp_enabled", html)
         self.assertNotIn("<dd>Bloccato</dd>", html)
         self.assertNotIn("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", html)
