@@ -1,17 +1,69 @@
-# Jarvis Core v1.4.0
+# Jarvis Core
 
-Personal MCP server for a synchronized Obsidian vault.
+Jarvis Core is a local-first MCP server for working with a synchronized Markdown vault.
+It exposes a small set of tools for reading notes, preserving captured material,
+versioning mutations, and reporting operational status without requiring the core service
+to use AI.
 
-## Tools
+The project is designed for personal or small-team knowledge bases where safety matters:
+original material is preserved, note mutations are versioned, and potentially ambiguous
+organization work is kept behind explicit review steps.
+
+## What Jarvis Core provides
+
+- MCP tools for reading, searching, creating, updating, moving, and versioning Markdown
+  notes.
+- A capture pipeline for preserving raw material before it is triaged.
+- A deterministic filesystem watcher that can monitor an inbox folder and queue captured
+  material without interpreting it semantically.
+- Optional HTTP transport for MCP clients, protected by explicit allowlists and a Bearer
+  token.
+- Optional authenticated status pages for operational visibility.
+- Versioned note mutations and append-only audit metadata.
+
+## Design principles
+
+- **No silent deletion:** the public tool surface deliberately does not expose a delete
+  operation.
+- **No hidden AI dependency in the core:** the watcher and server enforce deterministic
+  rules. AI clients may help with triage, but the core service does not need AI to run.
+- **Preserve originals:** captured material is kept in protected state before any later
+  processing decision.
+- **Confirm ambiguous work:** triage and organization are separate steps. A capture being
+  ready does not automatically authorize note creation, updates, or moves.
+- **Fail closed:** missing policy, stale hashes, invalid transitions, unsafe paths, and
+  broken state stop the operation instead of guessing.
+- **Keep secrets out of Git:** tokens, passwords, TOTP secrets, host-specific paths, and
+  deployment-specific domains belong outside the repository.
+
+## MCP tool groups
+
+### Status and discovery
 
 - `jarvis_status`
 - `list_notes`
 - `search_notes`
 - `read_note`
+- `recent_notes`
+- `recent_activity`
+- `list_tasks`
+
+### Versioning and mutation
+
+- `create_note`
+- `create_inbox_note`
+- `append_to_note`
+- `update_note`
+- `move_note`
 - `list_versions`
 - `read_version`
-- `list_tasks`
-- `recent_notes`
+- `restore_version`
+
+All note mutations require current revision information and preserve previous contents in
+protected state before applying changes.
+
+### Capture and triage
+
 - `ingestion_status`
 - `read_ingestion_policy`
 - `read_organization_policy`
@@ -20,76 +72,57 @@ Personal MCP server for a synchronized Obsidian vault.
 - `read_capture`
 - `read_pending_captures`
 - `update_capture_status`
-- `create_note`
-- `create_inbox_note`
-- `append_to_note`
-- `update_note`
-- `restore_version`
-- `move_note`
-- `recent_activity`
 
-There is deliberately no delete tool.
+Capture state transitions are intentionally strict. Raw capture content is preserved and
+is not deleted or rewritten by MCP tools.
 
-## Separate policy sources
+## Policy model
 
-Jarvis Core exposes two independent, user-editable policy notes:
+Jarvis Core uses two independent, user-editable policy notes:
 
-- `read_ingestion_policy` reads `Sistema — Acquisizione e triage.md`;
-- `read_organization_policy` reads `Sistema — Gestione automatica delle note.md`.
+- an acquisition and triage policy;
+- a note-organization policy.
 
-There is no silent fallback between them. If the requested policy is absent, the tool
-returns an error. `ingestion_status` reports the availability, path, and hash of the
-acquisition and triage policy.
+The policies are separate on purpose. The acquisition policy governs capture states and
+raw material preservation. The organization policy governs whether and how vault notes may
+be created, changed, or moved.
 
-## Ingestion and triage workflow
+There is no silent fallback between the two. If a required policy is missing or if a
+request is ambiguous, Jarvis should stop instead of applying an unsafe default.
 
-1. `capture_material` preserves raw text in `/state/captures`. Exact source/content
-   duplicates are returned as the existing capture rather than stored twice.
-2. Before triage, call `read_ingestion_policy`. Triage changes capture states only;
-   it does not create, update, or move vault notes.
-3. `read_pending_captures` returns a bounded batch of up to 20 raw captures without
-   changing their state.
-4. `update_capture_status` requires a fresh `record_sha256` from `read_capture` and a
-   non-empty summary of at most 2,000 characters.
-5. The server enforces these ordinary transitions:
+## Capture workflow
 
-   - `pending → ready`
-   - `pending → skipped`
-   - `ready → processed`
-   - `ready → skipped`
-   - `skipped → pending`
-   - `skipped → ready`
+A typical capture flow is:
 
-   Same-state transitions, direct `pending → processed`, `skipped → processed`, and
-   transitions out of `processed` are rejected.
-6. A `processed` capture must reference between 1 and 20 existing Markdown output
-   notes. Other states cannot contain output paths.
-7. Raw capture content is never deleted or rewritten by an MCP tool.
+1. Preserve raw material as a capture.
+2. Leave the capture in `pending` until reviewed.
+3. During triage, mark the capture as `ready` or `skipped`.
+4. Only after explicit confirmation, mark a `ready` capture as `processed` and reference
+   the existing Markdown notes that were updated.
 
-### Client compatibility
+Allowed ordinary transitions:
 
-The mandatory `summary`, exact 2,000-character input limit, and stricter transition
-matrix are intentionally compatibility-breaking for MCP clients that relied on the
-older permissive behavior. Clients must read a fresh `record_sha256`, send a non-empty
-summary, and follow the transition matrix above.
+- `pending → ready`
+- `pending → skipped`
+- `ready → processed`
+- `ready → skipped`
+- `skipped → pending`
+- `skipped → ready`
 
-For conversation and note organization, call `read_organization_policy`, search and
-read relevant notes, and follow its confirmation rules before using versioned note
-mutation tools. Jarvis Core validates revision hashes but cannot observe or enforce a
-word such as "confermo" in a client conversation.
+Rejected transitions include same-state transitions, direct `pending → processed`, direct
+`skipped → processed`, and any transition out of `processed`.
 
-Google Keep Takeout ZIP archives can be imported with `/app/import_keep.py`. The
-importer reads JSON directly without extracting the archive, preserves the original ZIP
-under `/state/imports/google-keep`, and converts note text, lists, labels, timestamps,
-and attachment references into captures. Use `--dry-run` first and `--limit 5` for an
-initial sample. Re-importing the same archive is deduplicated.
+A processed capture must include a meaningful summary and reference existing Markdown
+output paths. Other states must not contain output paths.
 
-## Streamable HTTP transport
+## HTTP transport
 
-The default transport remains `stdio`, preserving the existing Smart Composer over SSH
-path. Set these variables to run the same 23-tool MCP contract over Streamable HTTP:
+Jarvis can run over stdio or Streamable HTTP. HTTP mode is optional and should be enabled
+only for trusted clients behind explicit Host/Origin allowlists.
 
-```
+Example local-only configuration:
+
+```text
 JARVIS_TRANSPORT=streamable-http
 JARVIS_HTTP_HOST=127.0.0.1
 JARVIS_HTTP_PORT=8765
@@ -97,227 +130,107 @@ JARVIS_HTTP_ALLOWED_HOSTS=127.0.0.1:*,localhost:*
 JARVIS_HTTP_ALLOWED_ORIGINS=http://127.0.0.1:*,http://localhost:*
 JARVIS_MCP_ALLOWED_HOSTS=127.0.0.1:*,localhost:*
 JARVIS_HTTP_MCP_ENABLED=false
-JARVIS_MCP_BEARER_TOKEN_FILE=/home/satellite/jarvis/.jarvis-mcp-token
+JARVIS_MCP_BEARER_TOKEN_FILE=/path/outside/repository/mcp-token
 ```
 
-When explicitly enabled on the example loopback configuration, the MCP endpoint is
-`http://127.0.0.1:8765/mcp`. The port must be between 1 and 65535. Unknown transports
-and empty HTTP allowlists are rejected before startup.
-DNS rebinding protection is enabled by FastMCP. `JARVIS_HTTP_ALLOWED_HOSTS` controls the
-read-only browser routes, while the narrower `JARVIS_MCP_ALLOWED_HOSTS` independently
-controls the write-capable `/mcp` endpoint. `JARVIS_HTTP_MCP_ENABLED` is `false` by
-default and makes `/mcp` reject every request regardless of how a proxy rewrites Host;
-stdio remains available.
+When HTTP MCP is enabled, requests to `/mcp` require a Bearer token loaded from an
+external file. Never store the token value in Git, logs, command history, screenshots, or
+Markdown documentation.
 
-Setting `JARVIS_HTTP_MCP_ENABLED=true` also requires
-`JARVIS_MCP_BEARER_TOKEN_FILE`. The file must be external to the repository, must not be
-a symbolic link, and must contain one ASCII token of at least 32 bytes. Requests without
-the HTTP Bearer authorization header, or with a mismatched token, receive
-`401 Unauthorized`. Never put the token value in Git, logs, command arguments, HTML, or
-Markdown. A public hostname may be added to the browser allowlist without adding it to
-the MCP allowlist; direct HTTPS MCP additionally requires that hostname in
-`JARVIS_MCP_ALLOWED_HOSTS` and the Bearer token.
+## Authenticated status pages
 
-The same HTTP server exposes a dependency-free, read-only status interface at `/` and
-its JSON data source at `/api/status`. The page displays the safe operational metadata
-returned by `jarvis_status`; it does not expose note contents, capture contents, or
-mutation controls. Host and Origin validation still applies, but `/mcp` has the separate
-host allowlist described above. Enable MCP only for an authenticated client that
-also matches `JARVIS_MCP_ALLOWED_HOSTS`.
+The server can expose read-only operational pages for status and process visibility. These
+pages should show allowlisted metadata only: service state, counts, recent action names,
+and watcher health.
 
-### TOTP-protected process dashboard
+They must not expose:
 
-The optional `/dashboard` interface displays allowlisted operational metadata for Jarvis
-Core, the ingestion queue, audit counts, and recent action names. It has no mutation
-routes, process controls, Docker access, shell access, note paths, note titles, hashes, or
-note contents. Its JSON source is `/api/dashboard/status`.
+- note contents;
+- capture contents;
+- secrets;
+- shell access;
+- process-control buttons;
+- unrestricted filesystem paths;
+- token or TOTP values.
 
-The dashboard is disabled unless `JARVIS_DASHBOARD_TOTP_SECRET_FILE` names an external
-Base32 secret file. Generate that file on the server and pair it with a TOTP authenticator:
+Use external secret files for dashboard authentication material and keep them outside the
+repository.
 
-```bash
-python scripts/generate_dashboard_totp.py \
-  --output /home/satellite/jarvis/.jarvis-dashboard-totp \
-  --issuer Jarvis \
-  --account andry
-```
+## Deterministic vault watcher
 
-The command refuses to overwrite an existing file, creates a random 160-bit secret with
-mode `600`, and prints the sensitive `otpauth://` pairing URI once. Import that URI into an
-authenticator such as Aegis, 2FAS, or Google Authenticator without copying it into the
-repository or chat. The six-digit code changes every 30 seconds; the underlying secret
-does not rotate on every login.
+`app/watcher_service.py` runs as a separate deterministic process. It scans visible
+Markdown files, requires stable observations before accepting a transition, and detects
+changes that occurred while it was stopped.
 
-Enable the dashboard by passing only the host-side file path to the launcher:
+The watcher does not use AI and does not write, move, or delete vault notes.
 
-```bash
-JARVIS_DASHBOARD_TOTP_SECRET_FILE=/home/satellite/jarvis/.jarvis-dashboard-totp \
-JARVIS_HTTP_ALLOWED_ORIGINS=https://jarvis.dvdbnc.dpdns.org \
-JARVIS_DASHBOARD_TRUSTED_PROXY_PEERS=VERIFIED_PROXY_PEER_IP \
-./run-jarvis-http-main-v1.4.0.sh
-```
+Accepted content is preserved by SHA-256 before the durable snapshot advances. Events are
+recorded in append-only watcher audit state and unacknowledged events are kept in a durable
+outbox for replay after crashes.
 
-Replace `VERIFIED_PROXY_PEER_IP` with the socket peer address actually used by the local
-Cloudflare/Docker proxy. Only requests from that exact peer may use Cloudflare's
-`CF-Connecting-IP` header for per-client login limiting; all other peers are keyed by their
-socket address and cannot spoof the header. Do not add broad subnets or public addresses.
+Changes under an inbox folder can create deduplicated `pending` captures. Other visible
+Markdown changes are treated conservatively as review-required events rather than being
+interpreted semantically.
 
-The launcher validates permissions and mounts the file read-only at
-`/run/secrets/jarvis-dashboard-totp`. A successful TOTP login creates an eight-hour
-`Secure`, `HttpOnly`, `SameSite=Strict`, `__Host-` session cookie. Each accepted TOTP time
-counter is single-use, so replaying the same temporary code cannot create another session.
-Repeated login failures are limited
-to five attempts per client per five-minute window. Host and Origin checks run before authentication,
-and protected responses use `Cache-Control: no-store`.
+Operational requirements:
 
-The bundled launcher starts one Jarvis server process, matching the in-memory limiter and
-TOTP replay state. Do not add multiple HTTP workers without first replacing those stores
-with a shared deterministic backend.
+- keep `VAULT_ROOT` and `STATE_ROOT` separate and non-overlapping;
+- run only one watcher instance for a given state root;
+- keep watcher state outside the synchronized vault;
+- preserve content before acknowledging events;
+- report only aggregate watcher state in dashboards.
 
-The failure limiter and used-TOTP counters reset when the process restarts. Dashboard
-sessions are stateless: logout removes the browser cookie but cannot revoke a token that
-was copied beforehand. Rotating the external TOTP secret invalidates every existing
-session when immediate global revocation is required.
-
-### Deterministic vault watcher
-
-`app/watcher_service.py` is a separate deterministic process supervised by PM2 as
-`jarvis-watcher`. It scans visible Markdown files, requires two identical observations
-before accepting a transition, and detects changes that occurred while it was stopped.
-It does not use AI and does not write, move, or delete vault notes.
-
-Accepted content is preserved by SHA-256 under `/state/watcher-originals` before the
-durable snapshot advances. Events are written to `/state/watcher-events.jsonl` with a
-deterministic event ID that includes a persisted monotonic occurrence sequence;
-`/state/watcher-state.json` stores the restart baseline and
-`/state/watcher-outbox.json` preserves unacknowledged delivery across crashes. Changes
-under `AI Inbox` create deduplicated `pending` captures. Generated fingerprint/snapshot
-paths are ignored, while every other change is marked for review rather than interpreted
-semantically. A failed capture is retried before the event is acknowledged, even after a
-restart or source deletion. Deletions are not acknowledged unless the prior digest still
-resolves to verified preserved bytes, and every replay revalidates all referenced blobs.
-Permanently non-capturable Inbox content (for example empty, non-UTF-8, or over the capture
-limit) is acknowledged as `review_required` in `suggest` mode instead of starving later
-events. Audit records are read with a bounded binary `readline` and a 16 KiB record limit;
-the occurrence sequence keeps A→B→A→B as three records while replay remains idempotent.
-
-`STATE_ROOT` and `VAULT_ROOT` must be separate, non-overlapping directories. The watcher
-fails closed instead of writing state into the vault. Dashboard status is based on the
-persisted heartbeat and changes from `running` to `stale` after three minutes without a
-process heartbeat.
-On Linux, an advisory lock under `STATE_ROOT` rejects a second watcher process using the
-same state directory. Persistent files and content blobs use no-follow descriptor reads,
-atomic replacement, file `fsync`, and parent-directory `fsync` before acknowledgement.
-Vault paths are opened component-by-component with descriptor-relative no-follow semantics
-on Linux; a failed outbox write is also rolled back in memory before any callback can run.
-Watcher status and the Linux lock are also opened through bounded/no-follow descriptors.
-
-The poll interval defaults to one second and may be set from `0.1` to `60` seconds:
+Example interval setting:
 
 ```text
 JARVIS_WATCHER_INTERVAL_SECONDS=1.0
 ```
 
-Start the watcher from the repository root after the same external `VAULT_ROOT` and
-`STATE_ROOT` used by Jarvis are configured:
+## Optional read-only note browsing
 
-```bash
-pm2 start ecosystem.config.js --only jarvis-watcher
-pm2 save
-```
+Jarvis can optionally expose read-only note browsing routes. These should be disabled by
+default or limited to an explicit scope. If enabled publicly, protect them with HTTPS at
+the reverse proxy and with credentials stored outside the repository.
 
-The TOTP-protected dashboard exposes only aggregate watcher health and counters; it does
-not expose note paths, titles, hashes, or contents.
+Supported deployment modes may choose scopes such as:
 
-### Password-protected note reading
+- no note-reading route;
+- only overview/panorama notes;
+- all visible Markdown notes.
 
-The optional `/notes` page and its `/api/notes` and `/api/note` data sources expose
-visible Markdown in read-only mode. They use HTTP Basic authentication with username
-`jarvis`; the password is read from a small regular file mounted read-only into the
-container and must contain at least 12 bytes. The password value must never be stored in
-the repository or passed as a Docker environment variable. The note list is paginated in
-pages of at most 500 entries; filtering for panoramas happens before pagination.
-
-Web note reading is disabled by default. The launcher accepts these scopes:
-
-- `JARVIS_WEB_NOTE_SCOPE=none`: expose no note-reading route;
-- `JARVIS_WEB_NOTE_SCOPE=panoramas`: expose only notes named `00 — Panoramica.md`;
-- `JARVIS_WEB_NOTE_SCOPE=all-visible-markdown`: expose every visible Markdown note.
-
-For the initial restricted deployment, create a host-side password file without putting
-the password in shell history, then start with the panorama scope:
-
-```bash
-install -m 600 /dev/null /home/satellite/jarvis/.jarvis-web-note-password
-read -r -s JARVIS_WEB_NOTE_PASSWORD_VALUE
-printf '%s' "$JARVIS_WEB_NOTE_PASSWORD_VALUE" > /home/satellite/jarvis/.jarvis-web-note-password
-unset JARVIS_WEB_NOTE_PASSWORD_VALUE
-
-JARVIS_WEB_NOTE_SCOPE=panoramas \
-JARVIS_WEB_NOTE_PASSWORD_FILE=/home/satellite/jarvis/.jarvis-web-note-password \
-./run-jarvis-http-main-v1.4.0.sh
-```
-
-Changing only the scope to `all-visible-markdown` expands future access to all visible
-Markdown while retaining password protection, hidden-path rejection, vault confinement,
-and read-only HTTP methods. Public use requires HTTPS at the reverse proxy because Basic
-credentials accompany each protected request.
-
-TLS is deliberately not terminated by Jarvis. A reverse proxy such as Cloudflare may
-terminate public HTTPS and forward to this loopback HTTP origin. The `/mcp` endpoint
-contains write-capable tools, so the public launcher keeps MCP-over-HTTP disabled and its
-separate default allowlist accepts only loopback Host headers as defense in depth. Public
-requests are rejected even if Cloudflare rewrites Host. Jarvis 1.4.0 does not change
-Cloudflare or open a router port.
+Hidden paths, symlinks, and paths outside the configured vault must remain inaccessible.
 
 ## Safety contract
 
 - Only visible Markdown files inside the configured vault are accessible.
-- Hidden paths such as `.obsidian` and symbolic links are rejected.
-- Create and move operations never overwrite an existing destination.
-- Append, update, and move require the current `sha256` returned by `read_note`.
-- Previous note contents are copied to `/state/versions` before mutation.
-- Restores require fresh hashes for both the current note and selected saved version.
-- Restoring a version first preserves the current note as another saved version.
-- Mutation metadata is appended to `/state/audit.jsonl`; note contents are not logged.
-- Capture contents are stored only in the protected state directory. Capture lists and
-  audit tools return metadata, not raw contents.
-- Capture status changes require a current `record_sha256` and follow the enforced
-  transition matrix described above.
-- The HTTP container uses Docker's bridge network but publishes its MCP port only on
-  `127.0.0.1`; it has no Linux capabilities, uses a read-only root filesystem, applies
-  CPU/memory/process limits, and only the vault and state mounts are writable.
-- The launcher runs the container as the invoking Linux user so synchronized files
-  retain the correct ownership.
-- Each MCP connection uses a unique disposable container name. Multiple clients can
-  read concurrently, while `/state/.jarvis-mutation.lock` serializes mutations.
-- The launcher stops only its own session container after disconnect or termination.
+- Hidden paths and symbolic links are rejected.
+- Create and move operations never overwrite existing destinations.
+- Append, update, move, and restore operations require fresh hashes.
+- Previous note contents are versioned before mutation.
+- Capture contents are stored in protected state.
+- Capture status changes require a current `record_sha256` and a valid transition.
+- Audit records store mutation metadata, not note contents.
+- Runtime secrets are external files, not repository files.
+- The service should run with the smallest practical filesystem and network access.
 
 ## Local tests
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s tests -v
 ```
 
-On Windows, the POSIX file-mode test is intentionally skipped. It must run on Ubuntu
-before activation.
-
-## Release verification
-
-`scripts/release_helpers.py` provides fail-closed commands used by the installer. It
-validates the complete archive inventory and hashes in memory before manually writing
-verified files, rejects traversal, links and undeclared members, verifies that the
-backup command created one new checksum-valid snapshot, and restores the 1.3.2
-launcher if post-activation verification fails. The helper itself is delivered as a
-separate SHA-256-pinned artifact so it can verify the archive before extraction.
+Some platform-specific tests may be skipped on non-Linux hosts. Run Linux-specific safety
+checks on Linux before enabling production watcher behavior.
 
 ## Runtime paths
 
-The restricted launcher mounts:
+At runtime, configure explicit external paths for:
 
-- the synchronized vault as `/vault`;
-- protected Jarvis state as `/state`;
-- when web note reading is enabled, the password file read-only as
-  `/run/secrets/jarvis-web-note-password`.
+- the synchronized vault;
+- protected Jarvis state;
+- Bearer token files;
+- dashboard/TOTP secret files;
+- optional note-reading password files.
 
-The existing stdio transport remains available alongside the HTTP transport.
+Keep those paths environment-specific and outside Git. This README intentionally avoids
+real hostnames, usernames, domains, token paths, and personal vault details.
