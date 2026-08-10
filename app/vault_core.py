@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import tempfile
 import threading
 import uuid
@@ -32,6 +33,7 @@ CONTEXT_CHARS = 120
 INBOX_FOLDER = "AI Inbox"
 ORGANIZATION_POLICY_NOTE_PATH = "Sistema — Gestione automatica delle note.md"
 INGESTION_POLICY_NOTE_PATH = "Sistema — Acquisizione e triage.md"
+WATCHER_STATUS_STALE_SECONDS = 180
 
 CAPTURE_STATUSES = {"pending", "ready", "processed", "skipped"}
 CAPTURE_SOURCE_KINDS = {"manual", "google-keep", "file", "web", "other"}
@@ -511,14 +513,79 @@ def read_note_version(
     }
 
 
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _open_audit_append_descriptor(path: Path) -> int:
+    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except OSError as exc:
+        if path.is_symlink():
+            raise JarvisError("The audit path is not a safe file.") from exc
+        raise
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISREG(metadata.st_mode) or path.is_symlink():
+        os.close(descriptor)
+        raise JarvisError("The audit path is not a safe file.")
+    return descriptor
+
+
+def _read_bounded_regular_file(path: Path, max_bytes: int) -> bytes:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        if path.is_symlink():
+            raise ValueError("The file path is not safe.") from exc
+        raise
+    try:
+        metadata = os.fstat(descriptor)
+        path_metadata = os.stat(path, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or path.is_symlink()
+            or not os.path.samestat(metadata, path_metadata)
+            or metadata.st_size > max_bytes
+        ):
+            raise ValueError("The file path is not safe.")
+        with os.fdopen(descriptor, "rb", closefd=False) as source:
+            content = source.read(max_bytes + 1)
+        if len(content) > max_bytes:
+            raise ValueError("The file exceeds its size limit.")
+        return content
+    finally:
+        os.close(descriptor)
+
+
 def _append_audit(state: Path, record: dict[str, object]) -> str:
     event_id = uuid.uuid4().hex
     event = {"event_id": event_id, "timestamp_utc": _utc_text(), **record}
     audit_file = state / "audit.jsonl"
-    with audit_file.open("a", encoding="utf-8", newline="\n") as handle:
+    descriptor = _open_audit_append_descriptor(audit_file)
+    with os.fdopen(descriptor, "a", encoding="utf-8", newline="\n") as handle:
         handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
         handle.flush()
         os.fsync(handle.fileno())
+    _fsync_directory(audit_file.parent)
     return event_id
 
 
@@ -536,6 +603,7 @@ def _atomic_replace(note: Path, data: bytes, *, mode: int | None = None) -> None
         if mode is not None:
             os.chmod(temp_name, mode & 0o777)
         os.replace(temp_name, note)
+        _fsync_directory(note.parent)
         temp_name = None
     finally:
         if temp_name is not None:
@@ -822,6 +890,7 @@ def _captures_root(state: Path, *, create: bool) -> Path:
             raise JarvisError("The capture store is not a safe directory.")
     elif create:
         captures.mkdir(mode=0o700)
+        _fsync_directory(captures.parent)
     return captures
 
 
@@ -980,6 +1049,7 @@ def capture_material(
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
+        _fsync_directory(path.parent)
         event_id = _append_audit(
             state,
             {
@@ -1188,6 +1258,67 @@ def ingestion_status(root: Path, state: Path) -> dict[str, object]:
         "raw_material_is_preserved": True,
         "automatic_deletion_available": False,
     }
+
+
+def watcher_status(state: Path) -> dict[str, object]:
+    default: dict[str, object] = {
+        "service": "not-running",
+        "rule_version": "",
+        "last_poll_utc": "",
+        "events_processed": 0,
+        "captures_created": 0,
+        "review_required": 0,
+        "ignored": 0,
+        "errors": 0,
+    }
+    status_path = state / "watcher-service-status.json"
+    if not status_path.exists():
+        return default
+    try:
+        value = json.loads(
+            _read_bounded_regular_file(status_path, 16_384).decode("utf-8")
+        )
+        if not isinstance(value, dict):
+            raise ValueError
+        result = {
+            "service": value["service"],
+            "rule_version": value["rule_version"],
+            "last_poll_utc": value["last_poll_utc"],
+            "events_processed": value["events_processed"],
+            "captures_created": value["captures_created"],
+            "review_required": value["review_required"],
+            "ignored": value["ignored"],
+            "errors": value["errors"],
+        }
+        if not all(
+            isinstance(result[key], str)
+            for key in ("service", "rule_version", "last_poll_utc")
+        ) or not all(
+            not isinstance(result[key], bool)
+            and isinstance(result[key], int)
+            and result[key] >= 0
+            for key in (
+                "events_processed",
+                "captures_created",
+                "review_required",
+                "ignored",
+                "errors",
+            )
+        ):
+            raise ValueError
+        if result["service"] in {"running", "starting"}:
+            heartbeat_text = result["last_poll_utc"] or value.get("started_utc", "")
+            if not isinstance(heartbeat_text, str) or not heartbeat_text:
+                raise ValueError
+            heartbeat = datetime.fromisoformat(heartbeat_text.replace("Z", "+00:00"))
+            if heartbeat.tzinfo is None:
+                raise ValueError
+            age_seconds = (datetime.now(timezone.utc) - heartbeat).total_seconds()
+            if age_seconds > WATCHER_STATUS_STALE_SECONDS:
+                result["service"] = "stale"
+        return result
+    except (KeyError, OSError, UnicodeError, ValueError, json.JSONDecodeError):
+        return {**default, "service": "invalid", "errors": 1}
 
 
 def recent_activity(state: Path, max_results: int = 20) -> dict[str, object]:

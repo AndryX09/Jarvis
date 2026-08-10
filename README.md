@@ -179,6 +179,56 @@ sessions are stateless: logout removes the browser cookie but cannot revoke a to
 was copied beforehand. Rotating the external TOTP secret invalidates every existing
 session when immediate global revocation is required.
 
+### Deterministic vault watcher
+
+`app/watcher_service.py` is a separate deterministic process supervised by PM2 as
+`jarvis-watcher`. It scans visible Markdown files, requires two identical observations
+before accepting a transition, and detects changes that occurred while it was stopped.
+It does not use AI and does not write, move, or delete vault notes.
+
+Accepted content is preserved by SHA-256 under `/state/watcher-originals` before the
+durable snapshot advances. Events are written to `/state/watcher-events.jsonl` with a
+deterministic event ID that includes a persisted monotonic occurrence sequence;
+`/state/watcher-state.json` stores the restart baseline and
+`/state/watcher-outbox.json` preserves unacknowledged delivery across crashes. Changes
+under `AI Inbox` create deduplicated `pending` captures. Generated fingerprint/snapshot
+paths are ignored, while every other change is marked for review rather than interpreted
+semantically. A failed capture is retried before the event is acknowledged, even after a
+restart or source deletion. Deletions are not acknowledged unless the prior digest still
+resolves to verified preserved bytes, and every replay revalidates all referenced blobs.
+Permanently non-capturable Inbox content (for example empty, non-UTF-8, or over the capture
+limit) is acknowledged as `review_required` in `suggest` mode instead of starving later
+events. Audit records are read with a bounded binary `readline` and a 16 KiB record limit;
+the occurrence sequence keeps A→B→A→B as three records while replay remains idempotent.
+
+`STATE_ROOT` and `VAULT_ROOT` must be separate, non-overlapping directories. The watcher
+fails closed instead of writing state into the vault. Dashboard status is based on the
+persisted heartbeat and changes from `running` to `stale` after three minutes without a
+process heartbeat.
+On Linux, an advisory lock under `STATE_ROOT` rejects a second watcher process using the
+same state directory. Persistent files and content blobs use no-follow descriptor reads,
+atomic replacement, file `fsync`, and parent-directory `fsync` before acknowledgement.
+Vault paths are opened component-by-component with descriptor-relative no-follow semantics
+on Linux; a failed outbox write is also rolled back in memory before any callback can run.
+Watcher status and the Linux lock are also opened through bounded/no-follow descriptors.
+
+The poll interval defaults to one second and may be set from `0.1` to `60` seconds:
+
+```text
+JARVIS_WATCHER_INTERVAL_SECONDS=1.0
+```
+
+Start the watcher from the repository root after the same external `VAULT_ROOT` and
+`STATE_ROOT` used by Jarvis are configured:
+
+```bash
+pm2 start ecosystem.config.js --only jarvis-watcher
+pm2 save
+```
+
+The TOTP-protected dashboard exposes only aggregate watcher health and counters; it does
+not expose note paths, titles, hashes, or contents.
+
 ### Password-protected note reading
 
 The optional `/notes` page and its `/api/notes` and `/api/note` data sources expose
