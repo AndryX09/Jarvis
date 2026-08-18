@@ -70,7 +70,7 @@ def render_triage_page(captures: Iterable[dict[str, object]]) -> str:
       <div>
         <p class="eyebrow">Jarvis Console</p>
         <h1>Triage capture</h1>
-        <p class="lede">Capture pending pronte per revisione umana. Questa vista resta read-only: ti mostra cosa c'è in coda senza mutare ancora il vault.</p>
+        <p class="lede">Coda capture.</p>
       </div>
       <nav class="actions" aria-label="Azioni rapide">
         <a class="pill accent" href="/console">Console</a>
@@ -80,7 +80,7 @@ def render_triage_page(captures: Iterable[dict[str, object]]) -> str:
     </header>
 
     <section class="summary" aria-label="Stato triage" data-endpoint="/api/console/triage/captures">
-      <strong>Capture pending:</strong> {len(items)} in coda. Usa l'API di dettaglio <code>/api/console/triage/captures/&lt;capture_id&gt;</code> per leggere il contenuto grezzo di una singola capture.
+      <strong>Capture pending:</strong> {len(items)}
     </section>
 
     <section class="stack" aria-label="Capture pending">
@@ -110,7 +110,7 @@ def _render_capture_card(capture: dict[str, object]) -> str:
     return f"""
       <article class="capture" data-capture-id="{capture_id}">
         <h2>{title}</h2>
-        <p class="muted">Dettaglio disponibile su <code>/api/console/triage/captures/{capture_id}</code>.</p>
+        <p class="muted"><code>/api/console/triage/captures/{capture_id}</code></p>
         <dl>
           <dt>Capture ID</dt><dd><code>{capture_id}</code></dd>
           <dt>Stato</dt><dd>{status}</dd>

@@ -140,7 +140,7 @@ CONSOLE_PAGE_HTML = """<!doctype html>
       <div>
         <p class="eyebrow">Interfaccia operativa</p>
         <h1>Jarvis Console</h1>
-        <p class="lede">Questa console non duplica Obsidian e non duplica il sito di stato: serve per guidare i flussi che Jarvis gestisce meglio del solo vault, a partire da cattura, organizzazione, scrittura confermata e triage.</p>
+        <p class="lede">Scegli un flusso.</p>
       </div>
       <nav class="actions" aria-label="Azioni rapide">
         <a class="pill accent" href="/dashboard">Apri dashboard</a>
@@ -149,58 +149,48 @@ CONSOLE_PAGE_HTML = """<!doctype html>
       </nav>
     </header>
 
-    <section class="summary" aria-label="Posizionamento">
-      <strong>Ruoli separati:</strong> il watcher resta un backend silenzioso che preserva materiale ed eventi; la Jarvis Console è il punto in cui l’utente sceglie il flusso giusto senza ricordare parole magiche.
-    </section>
-
     <section class="grid" aria-label="Modalità operative Jarvis">
       <article class="card">
         <h2>Cattura</h2>
-        <p>Serve a non perdere spunti. Qui il testo resta grezzo o in incubazione, senza diventare subito una decisione o una nota definitiva.</p>
+        <p>Inbox rapida per spunti e materiale grezzo.</p>
         <ul>
           <li>salvare un’idea veloce</li>
           <li>conservare il testo originale</li>
           <li>marcare il materiale come da valutare</li>
         </ul>
-        <p class="hint">Esempio: <code>questa è un’idea buona</code> → capture o incubazione, non pubblicazione automatica.</p>
       </article>
 
       <article class="card">
         <h2>Organizzazione</h2>
-        <p>Serve a capire dove va il contenuto seguendo la policy <code>Sistema - gestione delle note</code>, cercando duplicati e pagine già pertinenti.</p>
+        <p>Trova la collocazione giusta nel vault.</p>
         <ul>
           <li>valutare se aggiornare una nota esistente</li>
           <li>proporre una nuova nota solo quando ha senso</li>
           <li>mantenere separate Natura e Stato</li>
         </ul>
-        <p class="hint">Obiettivo: meno note duplicate, più collocazione corretta.</p>
       </article>
 
       <article class="card">
         <h2>Scrittura</h2>
-        <p>Qui Jarvis applica davvero le modifiche confermate, usando hash/versioning e senza trasformare idee in decisioni da solo.</p>
+        <p>Applica modifiche confermate.</p>
         <ul>
           <li>aggiungere contenuto alla nota giusta</li>
           <li>creare una nuova nota solo se la policy lo giustifica</li>
           <li>preservare la formulazione originale dell’utente</li>
         </ul>
-        <p class="hint">Questa modalità tocca il vault; le altre possono fermarsi alla proposta.</p>
       </article>
 
       <article class="card">
         <h2>Triage</h2>
-        <p>Qui si gestiscono coda di acquisizione, capture pending/ready/processed e gli eventi del watcher senza affidarsi a una chat agentica continua.</p>
+        <p>Controlla la coda capture.</p>
         <ul>
           <li>leggere capture e stato pipeline</li>
           <li>cambiare stato con summary esplicito</li>
           <li>controllare watcher e audit</li>
         </ul>
-        <p class="hint">Questo è il pezzo più utile quando vuoi Jarvis operativo anche senza AI.</p>
         <p class="hint"><a class="pill accent" href="/console/triage">Apri il workbench di triage</a></p>
       </article>
     </section>
-
-    <footer>Prima fetta: questa pagina definisce i flussi. I prossimi step possono agganciare azioni reali, starting dal triage manuale delle capture.</footer>
   </main>
 </body>
 </html>

@@ -570,8 +570,8 @@ class StatusInterfaceIntegrationTests(unittest.TestCase):
         self.assertIn("Triage", html)
         self.assertIn('href="/dashboard"', html)
         self.assertIn('href="/notes"', html)
-        self.assertIn("non duplica Obsidian", html)
-        self.assertIn("non duplica il sito di stato", html)
+        self.assertIn("Scegli un flusso.", html)
+        self.assertIn('href="/console/triage"', html)
         self.assertNotIn("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", html)
 
     def test_public_status_page_links_to_console(self):
@@ -599,6 +599,7 @@ class StatusInterfaceIntegrationTests(unittest.TestCase):
         self.assertIn("Capture pending", html)
         self.assertIn('data-endpoint="/api/console/triage/captures"', html)
         self.assertIn("Idea watcher", html)
+        self.assertIn("Coda capture.", html)
 
     def test_console_triage_api_lists_capture_metadata_without_raw_content(self):
         with _running_http_server(
