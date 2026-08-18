@@ -50,8 +50,12 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
     body { margin: 0; background: #090b10; color: #f4f5f7; }
     header, main { width: min(1120px, calc(100% - 32px)); margin: 0 auto; }
     header { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 30px 0 22px; }
+    .header-copy { display: grid; gap: 10px; }
     .eyebrow { margin: 0 0 7px; color: #77e6b6; font-size: 12px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
     h1 { margin: 0; font-size: clamp(28px, 5vw, 44px); }
+    .nav { display: flex; gap: 10px; flex-wrap: wrap; }
+    .nav a { display: inline-flex; align-items: center; min-height: 36px; padding: 8px 12px; border: 1px solid #343b49; border-radius: 999px; color: #cbd0da; text-decoration: none; }
+    .nav a.active { border-color: #77e6b6; color: #77e6b6; }
     .readonly { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid #2c493d; border-radius: 999px; background: #10251d; color: #8bf0c3; font-size: 13px; font-weight: 750; }
     .readonly::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #77e6b6; box-shadow: 0 0 14px #77e6b6; }
     .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; padding-bottom: 28px; }
@@ -72,7 +76,7 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
 </head>
 <body data-dashboard="read-only">
   <header>
-    <div><p class="eyebrow">Jarvis Core</p><h1>Processi Jarvis</h1></div>
+    <div class="header-copy"><div><p class="eyebrow">Jarvis Core</p><h1>Processi Jarvis</h1></div><nav class="nav" aria-label="Navigazione dashboard"><a class="active" href="/dashboard">Dashboard</a><a href="/dashboard/console">Console</a><a href="/dashboard/triage">Triage</a></nav></div>
     <span class="readonly">Sola lettura</span>
   </header>
   <main class="grid">

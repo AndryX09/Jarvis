@@ -194,7 +194,7 @@ STATUS_PAGE_HTML = """<!doctype html>
         <h1>Jarvis Core</h1>
       </div>
       <div class="header-actions">
-        <a class="notes-link available" href="/console">Console</a>
+        <a class="notes-link available" href="/dashboard/console">Console</a>
         <a class="notes-link" id="dashboard-link" href="/dashboard">Dashboard</a>
         <a class="notes-link" id="notes-link" href="/notes">Leggi note</a>
         <div class="connection" id="connection-state" role="status" aria-live="polite">

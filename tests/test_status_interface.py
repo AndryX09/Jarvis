@@ -558,9 +558,29 @@ class StatusInterfaceIntegrationTests(unittest.TestCase):
         self.assertNotIn("<dd>Bloccato</dd>", html)
         self.assertNotIn("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", html)
 
-    def test_console_page_surfaces_guided_non_ai_workflows(self):
+    def test_dashboard_console_page_surfaces_guided_non_ai_workflows(self):
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, request, file_pointer, code, message, headers, url):
+                return None
+
+        code = _current_totp_code(b"12345678901234567890")
+        form = urllib.parse.urlencode({"code": code}).encode("ascii")
         with _running_http_server(dashboard_enabled=True) as base_url:
-            with urllib.request.urlopen(f"{base_url}/console", timeout=10) as response:
+            login_request = urllib.request.Request(
+                f"{base_url}/login",
+                data=form,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                method="POST",
+            )
+            opener = urllib.request.build_opener(NoRedirect)
+            with self.assertRaises(urllib.error.HTTPError) as raised:
+                opener.open(login_request, timeout=10)
+            session_cookie = raised.exception.headers["Set-Cookie"].split(";", 1)[0]
+            console_request = urllib.request.Request(
+                f"{base_url}/dashboard/console",
+                headers={"Cookie": session_cookie},
+            )
+            with urllib.request.urlopen(console_request, timeout=10) as response:
                 html = response.read().decode("utf-8")
 
         self.assertIn("Jarvis Console", html)
@@ -569,9 +589,9 @@ class StatusInterfaceIntegrationTests(unittest.TestCase):
         self.assertIn("Scrittura", html)
         self.assertIn("Triage", html)
         self.assertIn('href="/dashboard"', html)
-        self.assertIn('href="/notes"', html)
+        self.assertNotIn('href="/notes"', html)
         self.assertIn("Scegli un flusso.", html)
-        self.assertIn('href="/console/triage"', html)
+        self.assertIn('href="/dashboard/triage"', html)
         self.assertNotIn("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", html)
 
     def test_public_status_page_links_to_console(self):
@@ -579,10 +599,29 @@ class StatusInterfaceIntegrationTests(unittest.TestCase):
             with urllib.request.urlopen(base_url, timeout=10) as response:
                 html = response.read().decode("utf-8")
 
-        self.assertIn('href="/console"', html)
+        self.assertIn('href="/dashboard/console"', html)
         self.assertIn("Console", html)
 
-    def test_console_triage_page_renders_capture_workbench(self):
+    def test_dashboard_console_requires_login(self):
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, request, file_pointer, code, message, headers, url):
+                return None
+
+        with _running_http_server(dashboard_enabled=True) as base_url:
+            opener = urllib.request.build_opener(NoRedirect)
+            with self.assertRaises(urllib.error.HTTPError) as raised:
+                opener.open(f"{base_url}/dashboard/console", timeout=10)
+
+        self.assertEqual(raised.exception.code, 303)
+        self.assertEqual(raised.exception.headers["Location"], "/login")
+
+    def test_dashboard_triage_page_renders_capture_workbench(self):
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, request, file_pointer, code, message, headers, url):
+                return None
+
+        code = _current_totp_code(b"12345678901234567890")
+        form = urllib.parse.urlencode({"code": code}).encode("ascii")
         with _running_http_server(
             capture_fixtures=[
                 {
@@ -590,18 +629,39 @@ class StatusInterfaceIntegrationTests(unittest.TestCase):
                     "content": "Questa è una capture di prova.",
                     "labels": ["idea", "watcher"],
                 }
-            ]
+            ],
+            dashboard_enabled=True,
         ) as base_url:
-            with urllib.request.urlopen(f"{base_url}/console/triage", timeout=10) as response:
+            login_request = urllib.request.Request(
+                f"{base_url}/login",
+                data=form,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                method="POST",
+            )
+            opener = urllib.request.build_opener(NoRedirect)
+            with self.assertRaises(urllib.error.HTTPError) as raised:
+                opener.open(login_request, timeout=10)
+            session_cookie = raised.exception.headers["Set-Cookie"].split(";", 1)[0]
+            triage_request = urllib.request.Request(
+                f"{base_url}/dashboard/triage",
+                headers={"Cookie": session_cookie},
+            )
+            with urllib.request.urlopen(triage_request, timeout=10) as response:
                 html = response.read().decode("utf-8")
 
         self.assertIn("Triage capture", html)
         self.assertIn("Capture pending", html)
-        self.assertIn('data-endpoint="/api/console/triage/captures"', html)
+        self.assertIn('data-endpoint="/api/dashboard/triage/captures"', html)
         self.assertIn("Idea watcher", html)
         self.assertIn("Coda capture.", html)
 
-    def test_console_triage_api_lists_capture_metadata_without_raw_content(self):
+    def test_dashboard_triage_api_lists_capture_metadata_without_raw_content(self):
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, request, file_pointer, code, message, headers, url):
+                return None
+
+        code = _current_totp_code(b"12345678901234567890")
+        form = urllib.parse.urlencode({"code": code}).encode("ascii")
         with _running_http_server(
             capture_fixtures=[
                 {
@@ -609,11 +669,24 @@ class StatusInterfaceIntegrationTests(unittest.TestCase):
                     "content": "Contenuto riservato della capture.",
                     "labels": ["idea", "watcher"],
                 }
-            ]
+            ],
+            dashboard_enabled=True,
         ) as base_url:
-            with urllib.request.urlopen(
-                f"{base_url}/api/console/triage/captures", timeout=10
-            ) as response:
+            login_request = urllib.request.Request(
+                f"{base_url}/login",
+                data=form,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                method="POST",
+            )
+            opener = urllib.request.build_opener(NoRedirect)
+            with self.assertRaises(urllib.error.HTTPError) as raised:
+                opener.open(login_request, timeout=10)
+            session_cookie = raised.exception.headers["Set-Cookie"].split(";", 1)[0]
+            listing_request = urllib.request.Request(
+                f"{base_url}/api/dashboard/triage/captures",
+                headers={"Cookie": session_cookie},
+            )
+            with urllib.request.urlopen(listing_request, timeout=10) as response:
                 payload = json.loads(response.read())
 
         self.assertEqual(payload["status"], "pending")
@@ -625,7 +698,13 @@ class StatusInterfaceIntegrationTests(unittest.TestCase):
         self.assertIn("capture_id", capture)
         self.assertIn("record_sha256", capture)
 
-    def test_console_triage_api_reads_one_capture_with_raw_content(self):
+    def test_dashboard_triage_api_reads_one_capture_with_raw_content(self):
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, request, file_pointer, code, message, headers, url):
+                return None
+
+        code = _current_totp_code(b"12345678901234567890")
+        form = urllib.parse.urlencode({"code": code}).encode("ascii")
         with _running_http_server(
             capture_fixtures=[
                 {
@@ -633,17 +712,32 @@ class StatusInterfaceIntegrationTests(unittest.TestCase):
                     "content": "Contenuto riservato della capture.",
                     "labels": ["idea", "watcher"],
                 }
-            ]
+            ],
+            dashboard_enabled=True,
         ) as base_url:
-            with urllib.request.urlopen(
-                f"{base_url}/api/console/triage/captures", timeout=10
-            ) as response:
+            login_request = urllib.request.Request(
+                f"{base_url}/login",
+                data=form,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                method="POST",
+            )
+            opener = urllib.request.build_opener(NoRedirect)
+            with self.assertRaises(urllib.error.HTTPError) as raised:
+                opener.open(login_request, timeout=10)
+            session_cookie = raised.exception.headers["Set-Cookie"].split(";", 1)[0]
+            listing_request = urllib.request.Request(
+                f"{base_url}/api/dashboard/triage/captures",
+                headers={"Cookie": session_cookie},
+            )
+            with urllib.request.urlopen(listing_request, timeout=10) as response:
                 listing = json.loads(response.read())
 
             capture_id = listing["captures"][0]["capture_id"]
-            with urllib.request.urlopen(
-                f"{base_url}/api/console/triage/captures/{capture_id}", timeout=10
-            ) as response:
+            detail_request = urllib.request.Request(
+                f"{base_url}/api/dashboard/triage/captures/{capture_id}",
+                headers={"Cookie": session_cookie},
+            )
+            with urllib.request.urlopen(detail_request, timeout=10) as response:
                 payload = json.loads(response.read())
 
         self.assertEqual(payload["capture_id"], capture_id)

@@ -1,11 +1,18 @@
-CONSOLE_PAGE_HTML = """<!doctype html>
+from __future__ import annotations
+
+
+def render_console_page(*, triage_path: str, dashboard_path: str, status_path: str, notes_path: str | None = None) -> str:
+    notes_link = (
+        f'<a class="pill" href="{notes_path}">Leggi note consentite</a>' if notes_path else ""
+    )
+    return f"""<!doctype html>
 <html lang="it">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Jarvis Console</title>
   <style>
-    :root {
+    :root {{
       color-scheme: dark;
       --background: #0b0d10;
       --surface: #13171c;
@@ -14,11 +21,10 @@ CONSOLE_PAGE_HTML = """<!doctype html>
       --text: #edf2f7;
       --muted: #8e9aa7;
       --accent: #e2b714;
-      --success: #61d095;
-    }
+    }}
 
-    * { box-sizing: border-box; }
-    body {
+    * {{ box-sizing: border-box; }}
+    body {{
       margin: 0;
       min-height: 100vh;
       background:
@@ -26,45 +32,45 @@ CONSOLE_PAGE_HTML = """<!doctype html>
         var(--background);
       color: var(--text);
       font: 15px/1.6 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }
-    main {
+    }}
+    main {{
       width: min(1120px, calc(100% - 32px));
       margin: 0 auto;
       padding: 48px 0 72px;
-    }
-    header {
+    }}
+    header {{
       display: flex;
       justify-content: space-between;
       gap: 20px;
       margin-bottom: 26px;
       align-items: flex-start;
-    }
-    .eyebrow {
+    }}
+    .eyebrow {{
       margin: 0 0 8px;
       color: var(--accent);
       font-size: 12px;
       font-weight: 750;
       letter-spacing: 0.16em;
       text-transform: uppercase;
-    }
-    h1 {
+    }}
+    h1 {{
       margin: 0 0 10px;
       font-size: clamp(32px, 6vw, 52px);
       line-height: 1;
       letter-spacing: -0.04em;
-    }
-    p { margin: 0; }
-    .lede {
+    }}
+    p {{ margin: 0; }}
+    .lede {{
       max-width: 64ch;
       color: var(--muted);
       font-size: 16px;
-    }
-    .actions {
+    }}
+    .actions {{
       display: flex;
       gap: 10px;
       flex-wrap: wrap;
-    }
-    .pill {
+    }}
+    .pill {{
       display: inline-flex;
       align-items: center;
       min-height: 38px;
@@ -75,77 +81,62 @@ CONSOLE_PAGE_HTML = """<!doctype html>
       text-decoration: none;
       background: rgba(19, 23, 28, 0.88);
       white-space: nowrap;
-    }
-    .pill.accent {
+    }}
+    .pill.accent {{
       border-color: var(--accent);
       color: var(--accent);
-    }
-    .summary {
-      margin-bottom: 22px;
-      padding: 18px 20px;
-      border: 1px solid rgba(97, 208, 149, 0.25);
-      border-radius: 16px;
-      background: rgba(97, 208, 149, 0.06);
-      color: #d9f7e7;
-    }
-    .summary strong { color: var(--success); }
-    .grid {
+    }}
+    .grid {{
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 16px;
-    }
-    .card {
+    }}
+    .card {{
       padding: 22px;
       border: 1px solid var(--border);
       border-radius: 16px;
       background: linear-gradient(145deg, rgba(25, 31, 38, 0.96), rgba(19, 23, 28, 0.96));
       box-shadow: 0 18px 55px rgba(0, 0, 0, 0.18);
-    }
-    .card h2 {
+    }}
+    .card h2 {{
       margin: 0 0 8px;
       font-size: 24px;
       line-height: 1.1;
-    }
-    .card p {
+    }}
+    .card p {{
       color: var(--muted);
       margin-bottom: 14px;
-    }
-    ul {
+    }}
+    ul {{
       margin: 0;
       padding-left: 18px;
       display: grid;
       gap: 8px;
-    }
-    li::marker { color: var(--accent); }
-    .hint {
+    }}
+    li::marker {{ color: var(--accent); }}
+    .hint {{
       margin-top: 14px;
       color: #cfd8e3;
       font-size: 14px;
-    }
-    code { color: var(--accent); }
-    footer {
-      margin-top: 28px;
-      color: var(--muted);
-      font-size: 13px;
-    }
-    @media (max-width: 760px) {
-      header { flex-direction: column; }
-      .grid { grid-template-columns: 1fr; }
-    }
+    }}
+    @media (max-width: 760px) {{
+      header {{ flex-direction: column; }}
+      .grid {{ grid-template-columns: 1fr; }}
+    }}
   </style>
 </head>
 <body>
   <main>
     <header>
       <div>
-        <p class="eyebrow">Interfaccia operativa</p>
+        <p class="eyebrow">Dashboard privata</p>
         <h1>Jarvis Console</h1>
         <p class="lede">Scegli un flusso.</p>
       </div>
       <nav class="actions" aria-label="Azioni rapide">
-        <a class="pill accent" href="/dashboard">Apri dashboard</a>
-        <a class="pill" href="/notes">Leggi note consentite</a>
-        <a class="pill" href="/">Torna allo stato</a>
+        <a class="pill accent" href="{dashboard_path}">Dashboard</a>
+        {notes_link}
+        <a class="pill" href="{status_path}">Stato</a>
       </nav>
     </header>
 
@@ -188,7 +179,7 @@ CONSOLE_PAGE_HTML = """<!doctype html>
           <li>cambiare stato con summary esplicito</li>
           <li>controllare watcher e audit</li>
         </ul>
-        <p class="hint"><a class="pill accent" href="/console/triage">Apri il workbench di triage</a></p>
+        <p class="hint"><a class="pill accent" href="{triage_path}">Apri il workbench di triage</a></p>
       </article>
     </section>
   </main>

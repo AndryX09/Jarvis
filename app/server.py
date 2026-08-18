@@ -10,7 +10,7 @@ from typing import cast
 from urllib.parse import parse_qs
 
 import vault_core
-from console_page import CONSOLE_PAGE_HTML
+from console_page import render_console_page
 from dashboard_auth import (
     create_session_token,
     load_totp_secret,
@@ -218,6 +218,18 @@ def _dashboard_session_valid(request: Request) -> bool:
     )
 
 
+def _dashboard_access_error(request: Request) -> Response | None:
+    if DASHBOARD_TOTP_SECRET is None:
+        return Response(
+            "Not Found", status_code=404, headers=DASHBOARD_RESPONSE_HEADERS
+        )
+    if not _dashboard_session_valid(request):
+        return RedirectResponse(
+            "/login", status_code=303, headers=DASHBOARD_RESPONSE_HEADERS
+        )
+    return None
+
+
 def _dashboard_login_key(request: Request) -> str:
     peer = request.client.host if request.client is not None else "unknown"
     if peer in RUNTIME_CONFIG.dashboard_trusted_proxy_peers:
@@ -303,56 +315,163 @@ async def status_page(request: Request) -> Response:
 
 @mcp.custom_route("/console", methods=["GET"])
 async def console_page(request: Request) -> Response:
-    """Serve the guided Jarvis Console landing page for non-AI workflows."""
+    """Redirect the old public console path into the protected dashboard console."""
     validation_error = await STATUS_ROUTE_SECURITY.validate_request(request)
     if validation_error is not None:
         return validation_error
-    return HTMLResponse(CONSOLE_PAGE_HTML)
+    access_error = _dashboard_access_error(request)
+    if access_error is not None:
+        return access_error
+    return RedirectResponse(
+        "/dashboard/console", status_code=303, headers=DASHBOARD_RESPONSE_HEADERS
+    )
 
 
 @mcp.custom_route("/console/triage", methods=["GET"])
 async def console_triage_page(request: Request) -> Response:
-    """Serve the first real read-only triage workbench for pending captures."""
+    """Redirect the old public triage path into the protected dashboard triage."""
     validation_error = await STATUS_ROUTE_SECURITY.validate_request(request)
     if validation_error is not None:
         return validation_error
-    try:
-        captures = get_pending_capture_listing(20)["captures"]
-    except (JarvisError, OSError, UnicodeError):
-        LOGGER.exception("Unable to render the console triage page")
-        return JSONResponse({"error": "Console triage unavailable"}, status_code=503)
-    return HTMLResponse(render_triage_page(cast(list[dict[str, object]], captures)))
+    access_error = _dashboard_access_error(request)
+    if access_error is not None:
+        return access_error
+    return RedirectResponse(
+        "/dashboard/triage", status_code=303, headers=DASHBOARD_RESPONSE_HEADERS
+    )
 
 
 @mcp.custom_route("/api/console/triage/captures", methods=["GET"])
 async def console_triage_list_api(request: Request) -> Response:
-    """List pending capture metadata for the Jarvis Console triage workbench."""
+    """Redirect the old public triage API path into the protected dashboard API."""
     validation_error = await STATUS_ROUTE_SECURITY.validate_request(request)
     if validation_error is not None:
         return validation_error
-    try:
-        listing = get_pending_capture_listing(20)
-    except (JarvisError, OSError, UnicodeError):
-        LOGGER.exception("Unable to list pending captures for the console triage API")
-        return JSONResponse({"error": "Console triage unavailable"}, status_code=503)
-    return JSONResponse(listing)
+    access_error = _dashboard_access_error(request)
+    if access_error is not None:
+        return access_error
+    return RedirectResponse(
+        "/api/dashboard/triage/captures",
+        status_code=303,
+        headers=DASHBOARD_RESPONSE_HEADERS,
+    )
 
 
 @mcp.custom_route("/api/console/triage/captures/{capture_id}", methods=["GET"])
 async def console_triage_detail_api(request: Request) -> Response:
-    """Read one pending capture with raw content for manual triage."""
+    """Redirect the old public triage detail path into the protected dashboard API."""
     validation_error = await STATUS_ROUTE_SECURITY.validate_request(request)
     if validation_error is not None:
         return validation_error
     capture_id = request.path_params.get("capture_id", "")
+    access_error = _dashboard_access_error(request)
+    if access_error is not None:
+        return access_error
+    return RedirectResponse(
+        f"/api/dashboard/triage/captures/{capture_id}",
+        status_code=303,
+        headers=DASHBOARD_RESPONSE_HEADERS,
+    )
+
+
+@mcp.custom_route("/dashboard/console", methods=["GET"])
+async def dashboard_console_page(request: Request) -> Response:
+    """Serve the dashboard-protected Jarvis Console landing page."""
+    validation_error = await STATUS_ROUTE_SECURITY.validate_request(request)
+    if validation_error is not None:
+        return validation_error
+    access_error = _dashboard_access_error(request)
+    if access_error is not None:
+        return access_error
+    return HTMLResponse(
+        render_console_page(
+            triage_path="/dashboard/triage",
+            dashboard_path="/dashboard",
+            status_path="/",
+            notes_path="/notes" if WEB_NOTE_PASSWORD is not None else None,
+        ),
+        headers=DASHBOARD_RESPONSE_HEADERS,
+    )
+
+
+@mcp.custom_route("/dashboard/triage", methods=["GET"])
+async def dashboard_triage_page(request: Request) -> Response:
+    """Serve the protected triage workbench inside the dashboard area."""
+    validation_error = await STATUS_ROUTE_SECURITY.validate_request(request)
+    if validation_error is not None:
+        return validation_error
+    access_error = _dashboard_access_error(request)
+    if access_error is not None:
+        return access_error
+    try:
+        captures = get_pending_capture_listing(20)["captures"]
+    except (JarvisError, OSError, UnicodeError):
+        LOGGER.exception("Unable to render the dashboard triage page")
+        return JSONResponse(
+            {"error": "Console triage unavailable"},
+            status_code=503,
+            headers=DASHBOARD_RESPONSE_HEADERS,
+        )
+    return HTMLResponse(
+        render_triage_page(
+            cast(list[dict[str, object]], captures),
+            console_path="/dashboard/console",
+            dashboard_path="/dashboard",
+            status_path="/",
+            listing_endpoint="/api/dashboard/triage/captures",
+            detail_endpoint_prefix="/api/dashboard/triage/captures/",
+        ),
+        headers=DASHBOARD_RESPONSE_HEADERS,
+    )
+
+
+@mcp.custom_route("/api/dashboard/triage/captures", methods=["GET"])
+async def dashboard_triage_list_api(request: Request) -> Response:
+    """List pending capture metadata for the protected triage workbench."""
+    validation_error = await STATUS_ROUTE_SECURITY.validate_request(request)
+    if validation_error is not None:
+        return validation_error
+    access_error = _dashboard_access_error(request)
+    if access_error is not None:
+        return access_error
+    try:
+        listing = get_pending_capture_listing(20)
+    except (JarvisError, OSError, UnicodeError):
+        LOGGER.exception("Unable to list pending captures for the dashboard triage API")
+        return JSONResponse(
+            {"error": "Console triage unavailable"},
+            status_code=503,
+            headers=DASHBOARD_RESPONSE_HEADERS,
+        )
+    return JSONResponse(listing, headers=DASHBOARD_RESPONSE_HEADERS)
+
+
+@mcp.custom_route("/api/dashboard/triage/captures/{capture_id}", methods=["GET"])
+async def dashboard_triage_detail_api(request: Request) -> Response:
+    """Read one pending capture with raw content for manual triage."""
+    validation_error = await STATUS_ROUTE_SECURITY.validate_request(request)
+    if validation_error is not None:
+        return validation_error
+    access_error = _dashboard_access_error(request)
+    if access_error is not None:
+        return access_error
+    capture_id = request.path_params.get("capture_id", "")
     try:
         capture = get_capture_detail(str(capture_id))
     except JarvisError:
-        return JSONResponse({"error": "Capture not available"}, status_code=404)
+        return JSONResponse(
+            {"error": "Capture not available"},
+            status_code=404,
+            headers=DASHBOARD_RESPONSE_HEADERS,
+        )
     except (OSError, UnicodeError):
-        LOGGER.exception("Unable to read a capture for the console triage API")
-        return JSONResponse({"error": "Console triage unavailable"}, status_code=503)
-    return JSONResponse(capture)
+        LOGGER.exception("Unable to read a capture for the dashboard triage API")
+        return JSONResponse(
+            {"error": "Console triage unavailable"},
+            status_code=503,
+            headers=DASHBOARD_RESPONSE_HEADERS,
+        )
+    return JSONResponse(capture, headers=DASHBOARD_RESPONSE_HEADERS)
 
 
 @mcp.custom_route("/dashboard", methods=["GET"])

@@ -4,11 +4,20 @@ import html
 from typing import Iterable
 
 
-def render_triage_page(captures: Iterable[dict[str, object]]) -> str:
+def render_triage_page(
+    captures: Iterable[dict[str, object]],
+    *,
+    console_path: str,
+    dashboard_path: str,
+    status_path: str,
+    listing_endpoint: str,
+    detail_endpoint_prefix: str,
+) -> str:
     items = list(captures)
     if items:
         capture_cards = "\n".join(
-            _render_capture_card(item) for item in items
+            _render_capture_card(item, detail_endpoint_prefix=detail_endpoint_prefix)
+            for item in items
         )
     else:
         capture_cards = (
@@ -68,18 +77,18 @@ def render_triage_page(captures: Iterable[dict[str, object]]) -> str:
   <main>
     <header>
       <div>
-        <p class="eyebrow">Jarvis Console</p>
+        <p class="eyebrow">Dashboard privata</p>
         <h1>Triage capture</h1>
         <p class="lede">Coda capture.</p>
       </div>
       <nav class="actions" aria-label="Azioni rapide">
-        <a class="pill accent" href="/console">Console</a>
-        <a class="pill" href="/dashboard">Dashboard</a>
-        <a class="pill" href="/">Stato</a>
+        <a class="pill accent" href="{console_path}">Console</a>
+        <a class="pill" href="{dashboard_path}">Dashboard</a>
+        <a class="pill" href="{status_path}">Stato</a>
       </nav>
     </header>
 
-    <section class="summary" aria-label="Stato triage" data-endpoint="/api/console/triage/captures">
+    <section class="summary" aria-label="Stato triage" data-endpoint="{listing_endpoint}">
       <strong>Capture pending:</strong> {len(items)}
     </section>
 
@@ -92,7 +101,9 @@ def render_triage_page(captures: Iterable[dict[str, object]]) -> str:
 """
 
 
-def _render_capture_card(capture: dict[str, object]) -> str:
+def _render_capture_card(
+    capture: dict[str, object], *, detail_endpoint_prefix: str
+) -> str:
     title = html.escape(str(capture.get("title", "Capture senza titolo")))
     capture_id = html.escape(str(capture.get("capture_id", "")))
     source_kind = html.escape(str(capture.get("source_kind", "")))
@@ -110,7 +121,7 @@ def _render_capture_card(capture: dict[str, object]) -> str:
     return f"""
       <article class="capture" data-capture-id="{capture_id}">
         <h2>{title}</h2>
-        <p class="muted"><code>/api/console/triage/captures/{capture_id}</code></p>
+        <p class="muted"><code>{detail_endpoint_prefix}{capture_id}</code></p>
         <dl>
           <dt>Capture ID</dt><dd><code>{capture_id}</code></dd>
           <dt>Stato</dt><dd>{status}</dd>
