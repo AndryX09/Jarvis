@@ -57,6 +57,7 @@ def _running_http_server(
     dashboard_trusted_proxy: bool = False,
     dashboard_trusted_proxy_peer: str | None = None,
     http_mcp_enabled: bool = False,
+    capture_fixtures: list[dict[str, object]] | None = None,
 ):
     with tempfile.TemporaryDirectory() as temporary:
         temporary_root = Path(temporary)
@@ -90,6 +91,22 @@ def _running_http_server(
                 + "\n",
                 encoding="utf-8",
             )
+        if capture_fixtures:
+            app_root = str(ROOT / "app")
+            sys.path.insert(0, app_root)
+            try:
+                vault_core = importlib.import_module("vault_core")
+                for fixture in capture_fixtures:
+                    vault_core.capture_material(
+                        state,
+                        str(fixture["title"]),
+                        str(fixture["content"]),
+                        source_kind=str(fixture.get("source_kind", "manual")),
+                        source_ref=str(fixture.get("source_ref", "")),
+                        labels=list(fixture.get("labels", [])),
+                    )
+            finally:
+                sys.path.remove(app_root)
         if web_note_scope != "none":
             (vault / "00 — Panoramica.md").write_text(
                 "# Panoramica principale\n", encoding="utf-8"
@@ -540,6 +557,98 @@ class StatusInterfaceIntegrationTests(unittest.TestCase):
         self.assertIn("http_mcp_enabled", html)
         self.assertNotIn("<dd>Bloccato</dd>", html)
         self.assertNotIn("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", html)
+
+    def test_console_page_surfaces_guided_non_ai_workflows(self):
+        with _running_http_server(dashboard_enabled=True) as base_url:
+            with urllib.request.urlopen(f"{base_url}/console", timeout=10) as response:
+                html = response.read().decode("utf-8")
+
+        self.assertIn("Jarvis Console", html)
+        self.assertIn("Cattura", html)
+        self.assertIn("Organizzazione", html)
+        self.assertIn("Scrittura", html)
+        self.assertIn("Triage", html)
+        self.assertIn('href="/dashboard"', html)
+        self.assertIn('href="/notes"', html)
+        self.assertIn("non duplica Obsidian", html)
+        self.assertIn("non duplica il sito di stato", html)
+        self.assertNotIn("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", html)
+
+    def test_public_status_page_links_to_console(self):
+        with _running_http_server(dashboard_enabled=True) as base_url:
+            with urllib.request.urlopen(base_url, timeout=10) as response:
+                html = response.read().decode("utf-8")
+
+        self.assertIn('href="/console"', html)
+        self.assertIn("Console", html)
+
+    def test_console_triage_page_renders_capture_workbench(self):
+        with _running_http_server(
+            capture_fixtures=[
+                {
+                    "title": "Idea watcher",
+                    "content": "Questa è una capture di prova.",
+                    "labels": ["idea", "watcher"],
+                }
+            ]
+        ) as base_url:
+            with urllib.request.urlopen(f"{base_url}/console/triage", timeout=10) as response:
+                html = response.read().decode("utf-8")
+
+        self.assertIn("Triage capture", html)
+        self.assertIn("Capture pending", html)
+        self.assertIn('data-endpoint="/api/console/triage/captures"', html)
+        self.assertIn("Idea watcher", html)
+
+    def test_console_triage_api_lists_capture_metadata_without_raw_content(self):
+        with _running_http_server(
+            capture_fixtures=[
+                {
+                    "title": "Idea watcher",
+                    "content": "Contenuto riservato della capture.",
+                    "labels": ["idea", "watcher"],
+                }
+            ]
+        ) as base_url:
+            with urllib.request.urlopen(
+                f"{base_url}/api/console/triage/captures", timeout=10
+            ) as response:
+                payload = json.loads(response.read())
+
+        self.assertEqual(payload["status"], "pending")
+        self.assertEqual(len(payload["captures"]), 1)
+        capture = payload["captures"][0]
+        self.assertEqual(capture["title"], "Idea watcher")
+        self.assertEqual(capture["labels"], ["idea", "watcher"])
+        self.assertNotIn("content", capture)
+        self.assertIn("capture_id", capture)
+        self.assertIn("record_sha256", capture)
+
+    def test_console_triage_api_reads_one_capture_with_raw_content(self):
+        with _running_http_server(
+            capture_fixtures=[
+                {
+                    "title": "Idea watcher",
+                    "content": "Contenuto riservato della capture.",
+                    "labels": ["idea", "watcher"],
+                }
+            ]
+        ) as base_url:
+            with urllib.request.urlopen(
+                f"{base_url}/api/console/triage/captures", timeout=10
+            ) as response:
+                listing = json.loads(response.read())
+
+            capture_id = listing["captures"][0]["capture_id"]
+            with urllib.request.urlopen(
+                f"{base_url}/api/console/triage/captures/{capture_id}", timeout=10
+            ) as response:
+                payload = json.loads(response.read())
+
+        self.assertEqual(payload["capture_id"], capture_id)
+        self.assertEqual(payload["title"], "Idea watcher")
+        self.assertEqual(payload["content"], "Contenuto riservato della capture.")
+        self.assertEqual(payload["labels"], ["idea", "watcher"])
 
     def test_valid_totp_login_sets_secure_session_cookie(self):
         class NoRedirect(urllib.request.HTTPRedirectHandler):

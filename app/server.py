@@ -10,6 +10,7 @@ from typing import cast
 from urllib.parse import parse_qs
 
 import vault_core
+from console_page import CONSOLE_PAGE_HTML
 from dashboard_auth import (
     create_session_token,
     load_totp_secret,
@@ -31,6 +32,7 @@ from runtime_config import load_runtime_config
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from status_page import STATUS_PAGE_HTML
+from triage_page import render_triage_page
 from vault_core import JarvisError
 
 load_dotenv()
@@ -163,6 +165,18 @@ def _safe(callable_, *args, **kwargs) -> dict[str, object]:
         return {"error": str(exc)}
 
 
+def get_vault_status() -> dict[str, object]:
+    return vault_core.vault_status(VAULT_ROOT, STATE_ROOT)
+
+
+def get_pending_capture_listing(max_results: int = 20) -> dict[str, object]:
+    return vault_core.list_captures(STATE_ROOT, "pending", max_results)
+
+
+def get_capture_detail(capture_id: str) -> dict[str, object]:
+    return vault_core.read_capture(STATE_ROOT, capture_id)
+
+
 def _web_note_access_error(request: Request) -> Response | None:
     if WEB_NOTE_PASSWORD is None:
         return Response("Not Found", status_code=404, headers=WEB_NOTE_RESPONSE_HEADERS)
@@ -269,7 +283,7 @@ async def status_api(request: Request) -> Response:
     if validation_error is not None:
         return validation_error
     try:
-        status = vault_core.vault_status(VAULT_ROOT, STATE_ROOT)
+        status = get_vault_status()
     except (JarvisError, OSError, UnicodeError):
         LOGGER.exception("Unable to collect Jarvis status for the public status API")
         return JSONResponse({"error": "Jarvis status unavailable"}, status_code=503)
@@ -285,6 +299,60 @@ async def status_page(request: Request) -> Response:
     if validation_error is not None:
         return validation_error
     return HTMLResponse(STATUS_PAGE_HTML)
+
+
+@mcp.custom_route("/console", methods=["GET"])
+async def console_page(request: Request) -> Response:
+    """Serve the guided Jarvis Console landing page for non-AI workflows."""
+    validation_error = await STATUS_ROUTE_SECURITY.validate_request(request)
+    if validation_error is not None:
+        return validation_error
+    return HTMLResponse(CONSOLE_PAGE_HTML)
+
+
+@mcp.custom_route("/console/triage", methods=["GET"])
+async def console_triage_page(request: Request) -> Response:
+    """Serve the first real read-only triage workbench for pending captures."""
+    validation_error = await STATUS_ROUTE_SECURITY.validate_request(request)
+    if validation_error is not None:
+        return validation_error
+    try:
+        captures = get_pending_capture_listing(20)["captures"]
+    except (JarvisError, OSError, UnicodeError):
+        LOGGER.exception("Unable to render the console triage page")
+        return JSONResponse({"error": "Console triage unavailable"}, status_code=503)
+    return HTMLResponse(render_triage_page(cast(list[dict[str, object]], captures)))
+
+
+@mcp.custom_route("/api/console/triage/captures", methods=["GET"])
+async def console_triage_list_api(request: Request) -> Response:
+    """List pending capture metadata for the Jarvis Console triage workbench."""
+    validation_error = await STATUS_ROUTE_SECURITY.validate_request(request)
+    if validation_error is not None:
+        return validation_error
+    try:
+        listing = get_pending_capture_listing(20)
+    except (JarvisError, OSError, UnicodeError):
+        LOGGER.exception("Unable to list pending captures for the console triage API")
+        return JSONResponse({"error": "Console triage unavailable"}, status_code=503)
+    return JSONResponse(listing)
+
+
+@mcp.custom_route("/api/console/triage/captures/{capture_id}", methods=["GET"])
+async def console_triage_detail_api(request: Request) -> Response:
+    """Read one pending capture with raw content for manual triage."""
+    validation_error = await STATUS_ROUTE_SECURITY.validate_request(request)
+    if validation_error is not None:
+        return validation_error
+    capture_id = request.path_params.get("capture_id", "")
+    try:
+        capture = get_capture_detail(str(capture_id))
+    except JarvisError:
+        return JSONResponse({"error": "Capture not available"}, status_code=404)
+    except (OSError, UnicodeError):
+        LOGGER.exception("Unable to read a capture for the console triage API")
+        return JSONResponse({"error": "Console triage unavailable"}, status_code=503)
+    return JSONResponse(capture)
 
 
 @mcp.custom_route("/dashboard", methods=["GET"])
