@@ -28,6 +28,7 @@ from mcp.server.transport_security import (
     TransportSecuritySettings,
 )
 from notes_page import NOTES_PAGE_HTML
+from organization_page import render_organization_page
 from runtime_config import load_runtime_config
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -173,8 +174,128 @@ def get_pending_capture_listing(max_results: int = 20) -> dict[str, object]:
     return vault_core.list_captures(STATE_ROOT, "pending", max_results)
 
 
+def get_capture_listing(status: str = "pending", max_results: int = 20) -> dict[str, object]:
+    return vault_core.list_captures(STATE_ROOT, status, max_results)
+
+
 def get_capture_detail(capture_id: str) -> dict[str, object]:
     return vault_core.read_capture(STATE_ROOT, capture_id)
+
+
+def update_capture_triage(
+    capture_id: str,
+    status: str,
+    expected_record_sha256: str,
+    summary: str,
+    output_paths: list[str] | None = None,
+) -> dict[str, object]:
+    return vault_core.update_capture_status(
+        VAULT_ROOT,
+        STATE_ROOT,
+        capture_id,
+        status,
+        expected_record_sha256,
+        output_paths=output_paths,
+        summary=summary,
+    )
+
+
+def _suggest_output_path(title: str) -> str:
+    cleaned = " ".join(title.split()).strip() or "Capture"
+    safe = "".join(char for char in cleaned if char not in '<>:"/\\|?*').strip().rstrip(".")
+    return f"AI Inbox/{safe or 'Capture'}.md"
+
+
+def _organization_candidates(capture: dict[str, object]) -> list[dict[str, str]]:
+    title = str(capture.get("title", "")).strip()
+    candidates: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for token in title.split():
+        cleaned = token.strip(".,:;!?()[]{}\"'")
+        if len(cleaned) < 2:
+            continue
+        try:
+            matches = vault_core.search_vault(VAULT_ROOT, cleaned, 5)["matches"]
+        except (JarvisError, OSError, UnicodeError):
+            continue
+        for match in cast(list[dict[str, object]], matches):
+            path = str(match.get("path", "")).strip()
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            candidates.append(
+                {
+                    "path": path,
+                    "reason": str(match.get("excerpt", "match")) or "match",
+                }
+            )
+            if len(candidates) >= 5:
+                return candidates
+    if candidates:
+        return candidates
+    try:
+        recent = vault_core.recent_notes(VAULT_ROOT, 5)["notes"]
+    except (JarvisError, OSError, UnicodeError):
+        return []
+    for note in cast(list[dict[str, object]], recent):
+        path = str(note.get("path", "")).strip()
+        if not path or path in seen:
+            continue
+        candidates.append({"path": path, "reason": "recente"})
+    return candidates
+
+
+def _organization_policy_excerpt() -> tuple[str, str]:
+    try:
+        policy = vault_core.read_organization_policy(VAULT_ROOT)
+    except (JarvisError, OSError, UnicodeError):
+        return (
+            "Sistema — Gestione automatica delle note.md",
+            "Usa note esistenti quando bastano. Crea una nuova nota solo quando il materiale è autonomo.",
+        )
+    content = str(policy.get("content", "")).strip()
+    excerpt = " ".join(content.split())[:400] or "Policy non disponibile."
+    return str(policy.get("policy_path", "")), excerpt
+
+
+def _build_capture_note_content(capture: dict[str, object], summary: str) -> str:
+    title = str(capture.get("title", "Capture")).strip() or "Capture"
+    body = str(capture.get("content", "")).strip()
+    return f"# {title}\n\n{summary.strip()}\n\n{body}\n"
+
+
+def _build_capture_append_content(capture: dict[str, object], summary: str) -> str:
+    title = str(capture.get("title", "Capture")).strip() or "Capture"
+    body = str(capture.get("content", "")).strip()
+    return (
+        "\n\n## Capture organizzata\n"
+        f"Titolo: {title}\n\n"
+        f"{summary.strip()}\n\n"
+        f"{body}\n"
+    )
+
+
+def _apply_organization_write(
+    *,
+    capture: dict[str, object],
+    write_mode: str,
+    output_path: str,
+    summary: str,
+) -> None:
+    if write_mode == "create_note":
+        create_note(
+            output_path,
+            _build_capture_note_content(capture, summary),
+        )
+        return
+    if write_mode == "append_note":
+        note = vault_core.read_note_from_vault(VAULT_ROOT, output_path)
+        append_to_note(
+            output_path,
+            _build_capture_append_content(capture, summary),
+            str(note["sha256"]),
+        )
+        return
 
 
 def _web_note_access_error(request: Request) -> Response | None:
@@ -288,6 +409,59 @@ async def _read_limited_request_body(request: Request, max_bytes: int) -> bytes 
     return bytes(body)
 
 
+def _requested_capture_status(request: Request) -> str:
+    requested = request.query_params.get("status", "pending")
+    if requested in {"pending", "ready", "processed", "skipped"}:
+        return requested
+    return "pending"
+
+
+def _render_dashboard_triage_response(
+    captures: list[dict[str, object]],
+    *,
+    active_status: str,
+    selected_capture: dict[str, object] | None = None,
+    selected_capture_id: str = "",
+    flash_message: str = "",
+    flash_error: str = "",
+    status_code: int = 200,
+) -> Response:
+    return HTMLResponse(
+        render_triage_page(
+            captures,
+            console_path="/dashboard/console",
+            dashboard_path="/dashboard",
+            status_path="/",
+            listing_endpoint=f"/api/dashboard/triage/captures?status={active_status}",
+            detail_endpoint_prefix="/api/dashboard/triage/captures/",
+            action_path="/dashboard/triage",
+            active_status=active_status,
+            selected_capture=selected_capture,
+            selected_capture_id=selected_capture_id,
+            flash_message=flash_message,
+            flash_error=flash_error,
+        ),
+        status_code=status_code,
+        headers=DASHBOARD_RESPONSE_HEADERS,
+    )
+
+
+def _select_triage_capture(
+    captures: list[dict[str, object]], requested_capture_id: str
+) -> tuple[str, dict[str, object] | None]:
+    if not captures:
+        return "", None
+    requested = requested_capture_id.strip()
+    capture_ids = [str(item.get("capture_id", "")) for item in captures]
+    selected_id = requested if requested in capture_ids else capture_ids[0]
+    try:
+        selected_capture = get_capture_detail(selected_id)
+    except (JarvisError, OSError, UnicodeError):
+        LOGGER.exception("Unable to read selected capture detail for the dashboard triage page")
+        return selected_id, None
+    return selected_id, selected_capture
+
+
 @mcp.custom_route("/api/status", methods=["GET"])
 async def status_api(request: Request) -> Response:
     """Return the same safe, read-only status data exposed by the MCP tool."""
@@ -394,7 +568,138 @@ async def dashboard_console_page(request: Request) -> Response:
     )
 
 
-@mcp.custom_route("/dashboard/triage", methods=["GET"])
+@mcp.custom_route("/dashboard/organize", methods=["GET", "POST"])
+async def dashboard_organize_page(request: Request) -> Response:
+    """Serve the protected proposal-first organization review for ready captures."""
+    validation_error = await STATUS_ROUTE_SECURITY.validate_request(request)
+    if validation_error is not None:
+        return validation_error
+    access_error = _dashboard_access_error(request)
+    if access_error is not None:
+        return access_error
+    if request.method == "POST":
+        if (
+            not request.headers.get("content-type", "")
+            .casefold()
+            .startswith("application/x-www-form-urlencoded")
+        ):
+            return JSONResponse(
+                {"error": "Organization review unavailable"},
+                status_code=400,
+                headers=DASHBOARD_RESPONSE_HEADERS,
+            )
+        body = await _read_limited_request_body(request, 8192)
+        if body is None:
+            return JSONResponse(
+                {"error": "Organization review unavailable"},
+                status_code=400,
+                headers=DASHBOARD_RESPONSE_HEADERS,
+            )
+        try:
+            fields = parse_qs(body.decode("utf-8"), strict_parsing=True, max_num_fields=5)
+            capture_id = fields["capture_id"][0]
+            expected_record_sha256 = fields["expected_record_sha256"][0]
+            summary = fields["summary"][0]
+            output_path = fields["output_path"][0]
+            write_mode = fields.get("write_mode", [""])[0]
+        except (KeyError, UnicodeDecodeError, ValueError, IndexError):
+            return JSONResponse(
+                {"error": "Organization review unavailable"},
+                status_code=400,
+                headers=DASHBOARD_RESPONSE_HEADERS,
+            )
+        try:
+            capture = get_capture_detail(capture_id)
+            _apply_organization_write(
+                capture=capture,
+                write_mode=write_mode,
+                output_path=output_path,
+                summary=summary,
+            )
+            update_capture_triage(
+                capture_id,
+                "processed",
+                expected_record_sha256,
+                summary,
+                output_paths=[output_path] if output_path.strip() else [],
+            )
+        except JarvisError as exc:
+            try:
+                captures = cast(list[dict[str, object]], get_capture_listing("ready", 20)["captures"])
+                selected_capture_id, selected_capture = _select_triage_capture(captures, capture_id)
+                policy_path, policy_excerpt = _organization_policy_excerpt()
+            except (JarvisError, OSError, UnicodeError):
+                LOGGER.exception("Unable to render the dashboard organization page")
+                return JSONResponse(
+                    {"error": "Organization review unavailable"},
+                    status_code=503,
+                    headers=DASHBOARD_RESPONSE_HEADERS,
+                )
+            return HTMLResponse(
+                render_organization_page(
+                    captures=captures,
+                    selected_capture=selected_capture,
+                    selected_capture_id=selected_capture_id,
+                    console_path="/dashboard/console",
+                    dashboard_path="/dashboard",
+                    triage_path="/dashboard/triage?status=ready",
+                    policy_path=policy_path,
+                    policy_excerpt=policy_excerpt,
+                    candidates=_organization_candidates(selected_capture) if selected_capture else [],
+                    suggested_output_path=(
+                        _suggest_output_path(str(selected_capture.get("title", "")))
+                        if selected_capture
+                        else "AI Inbox/Capture.md"
+                    ),
+                    action_path="/dashboard/organize",
+                    flash_error=str(exc),
+                ),
+                status_code=409 if "changed since it was read" in str(exc) else 400,
+                headers=DASHBOARD_RESPONSE_HEADERS,
+            )
+        return RedirectResponse(
+            f"/dashboard/triage?status=processed&updated={capture_id}",
+            status_code=303,
+            headers=DASHBOARD_RESPONSE_HEADERS,
+        )
+    try:
+        captures = cast(list[dict[str, object]], get_capture_listing("ready", 20)["captures"])
+        selected_capture_id, selected_capture = _select_triage_capture(
+            captures, request.query_params.get("selected", "")
+        )
+        policy_path, policy_excerpt = _organization_policy_excerpt()
+    except (JarvisError, OSError, UnicodeError):
+        LOGGER.exception("Unable to render the dashboard organization page")
+        return JSONResponse(
+            {"error": "Organization review unavailable"},
+            status_code=503,
+            headers=DASHBOARD_RESPONSE_HEADERS,
+        )
+    candidates = _organization_candidates(selected_capture) if selected_capture else []
+    suggested_output_path = (
+        _suggest_output_path(str(selected_capture.get("title", "")))
+        if selected_capture
+        else "AI Inbox/Capture.md"
+    )
+    return HTMLResponse(
+        render_organization_page(
+            captures=captures,
+            selected_capture=selected_capture,
+            selected_capture_id=selected_capture_id,
+            console_path="/dashboard/console",
+            dashboard_path="/dashboard",
+            triage_path="/dashboard/triage?status=ready",
+            policy_path=policy_path,
+            policy_excerpt=policy_excerpt,
+            candidates=candidates,
+            suggested_output_path=suggested_output_path,
+            action_path="/dashboard/organize",
+        ),
+        headers=DASHBOARD_RESPONSE_HEADERS,
+    )
+
+
+@mcp.custom_route("/dashboard/triage", methods=["GET", "POST"])
 async def dashboard_triage_page(request: Request) -> Response:
     """Serve the protected triage workbench inside the dashboard area."""
     validation_error = await STATUS_ROUTE_SECURITY.validate_request(request)
@@ -403,8 +708,115 @@ async def dashboard_triage_page(request: Request) -> Response:
     access_error = _dashboard_access_error(request)
     if access_error is not None:
         return access_error
+    active_status = _requested_capture_status(request)
+    requested_capture_id = request.query_params.get("selected", "")
+    if request.method == "POST":
+        if (
+            not request.headers.get("content-type", "")
+            .casefold()
+            .startswith("application/x-www-form-urlencoded")
+        ):
+            try:
+                captures = cast(
+                    list[dict[str, object]], get_capture_listing(active_status, 20)["captures"]
+                )
+            except (JarvisError, OSError, UnicodeError):
+                LOGGER.exception("Unable to render the dashboard triage page")
+                return JSONResponse(
+                    {"error": "Console triage unavailable"},
+                    status_code=503,
+                    headers=DASHBOARD_RESPONSE_HEADERS,
+                )
+            return _render_dashboard_triage_response(
+                captures,
+                active_status=active_status,
+                selected_capture_id=requested_capture_id,
+                flash_error="Richiesta non valida.",
+                status_code=400,
+            )
+        body = await _read_limited_request_body(request, 8192)
+        if body is None:
+            try:
+                captures = cast(
+                    list[dict[str, object]], get_capture_listing(active_status, 20)["captures"]
+                )
+            except (JarvisError, OSError, UnicodeError):
+                LOGGER.exception("Unable to render the dashboard triage page")
+                return JSONResponse(
+                    {"error": "Console triage unavailable"},
+                    status_code=503,
+                    headers=DASHBOARD_RESPONSE_HEADERS,
+                )
+            return _render_dashboard_triage_response(
+                captures,
+                active_status=active_status,
+                flash_error="Richiesta non valida.",
+                status_code=400,
+            )
+        try:
+            fields = parse_qs(body.decode("utf-8"), strict_parsing=True, max_num_fields=5)
+            capture_id = fields["capture_id"][0]
+            target_status = fields["status"][0]
+            expected_record_sha256 = fields["expected_record_sha256"][0]
+            summary = fields["summary"][0]
+            return_status = fields.get("return_status", [active_status])[0]
+        except (KeyError, UnicodeDecodeError, ValueError, IndexError):
+            try:
+                captures = cast(
+                    list[dict[str, object]], get_capture_listing(active_status, 20)["captures"]
+                )
+            except (JarvisError, OSError, UnicodeError):
+                LOGGER.exception("Unable to render the dashboard triage page")
+                return JSONResponse(
+                    {"error": "Console triage unavailable"},
+                    status_code=503,
+                    headers=DASHBOARD_RESPONSE_HEADERS,
+                )
+            return _render_dashboard_triage_response(
+                captures,
+                active_status=active_status,
+                flash_error="Richiesta non valida.",
+                status_code=400,
+            )
+        try:
+            update_capture_triage(
+                capture_id,
+                target_status,
+                expected_record_sha256,
+                summary,
+            )
+        except JarvisError as exc:
+            try:
+                captures = cast(
+                    list[dict[str, object]],
+                    get_capture_listing(
+                        return_status if return_status in {"pending", "ready", "processed", "skipped"} else active_status,
+                        20,
+                    )["captures"],
+                )
+            except (JarvisError, OSError, UnicodeError):
+                LOGGER.exception("Unable to render the dashboard triage page")
+                return JSONResponse(
+                    {"error": "Console triage unavailable"},
+                    status_code=503,
+                    headers=DASHBOARD_RESPONSE_HEADERS,
+                )
+            status_code = 409 if "changed since it was read" in str(exc) else 400
+            return _render_dashboard_triage_response(
+                captures,
+                active_status=(return_status if return_status in {"pending", "ready", "processed", "skipped"} else active_status),
+                selected_capture_id=capture_id,
+                flash_error=str(exc),
+                status_code=status_code,
+            )
+        redirect_status = target_status if target_status in {"pending", "ready", "processed", "skipped"} else "pending"
+        return RedirectResponse(
+            f"/dashboard/triage?status={redirect_status}&updated={capture_id}",
+            status_code=303,
+            headers=DASHBOARD_RESPONSE_HEADERS,
+        )
     try:
-        captures = get_pending_capture_listing(20)["captures"]
+        captures = get_capture_listing(active_status, 20)["captures"]
     except (JarvisError, OSError, UnicodeError):
         LOGGER.exception("Unable to render the dashboard triage page")
         return JSONResponse(
@@ -412,32 +824,36 @@ async def dashboard_triage_page(request: Request) -> Response:
             status_code=503,
             headers=DASHBOARD_RESPONSE_HEADERS,
         )
-    return HTMLResponse(
-        render_triage_page(
-            cast(list[dict[str, object]], captures),
-            console_path="/dashboard/console",
-            dashboard_path="/dashboard",
-            status_path="/",
-            listing_endpoint="/api/dashboard/triage/captures",
-            detail_endpoint_prefix="/api/dashboard/triage/captures/",
-        ),
-        headers=DASHBOARD_RESPONSE_HEADERS,
+    updated_capture_id = request.query_params.get("updated", "").strip()
+    flash_message = (
+        f"Capture aggiornata: {updated_capture_id}" if updated_capture_id else ""
+    )
+    selected_capture_id, selected_capture = _select_triage_capture(
+        cast(list[dict[str, object]], captures), requested_capture_id or updated_capture_id
+    )
+    return _render_dashboard_triage_response(
+        cast(list[dict[str, object]], captures),
+        active_status=active_status,
+        selected_capture=selected_capture,
+        selected_capture_id=selected_capture_id,
+        flash_message=flash_message,
     )
 
 
 @mcp.custom_route("/api/dashboard/triage/captures", methods=["GET"])
 async def dashboard_triage_list_api(request: Request) -> Response:
-    """List pending capture metadata for the protected triage workbench."""
+    """List capture metadata for the protected triage workbench."""
     validation_error = await STATUS_ROUTE_SECURITY.validate_request(request)
     if validation_error is not None:
         return validation_error
     access_error = _dashboard_access_error(request)
     if access_error is not None:
         return access_error
+    status = _requested_capture_status(request)
     try:
-        listing = get_pending_capture_listing(20)
+        listing = get_capture_listing(status, 20)
     except (JarvisError, OSError, UnicodeError):
-        LOGGER.exception("Unable to list pending captures for the dashboard triage API")
+        LOGGER.exception("Unable to list dashboard triage captures")
         return JSONResponse(
             {"error": "Console triage unavailable"},
             status_code=503,
