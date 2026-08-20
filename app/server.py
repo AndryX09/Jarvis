@@ -296,6 +296,21 @@ def _apply_organization_write(
             str(note["sha256"]),
         )
         return
+def _validate_organization_write_request(
+    *,
+    capture: dict[str, object],
+    expected_record_sha256: str,
+    write_mode: str,
+) -> None:
+    normalized_mode = write_mode.strip()
+    if normalized_mode not in {"", "create_note", "append_note"}:
+        raise JarvisError("The organization write mode is invalid.")
+    if str(capture.get("status", "")) != "ready":
+        raise JarvisError("Only ready captures can be organized.")
+    if str(capture.get("record_sha256", "")).strip().lower() != expected_record_sha256.strip().lower():
+        raise JarvisError(
+            "The capture changed since it was read. Read it again before updating it."
+        )
 
 
 def _web_note_access_error(request: Request) -> Response | None:
@@ -609,20 +624,26 @@ async def dashboard_organize_page(request: Request) -> Response:
                 headers=DASHBOARD_RESPONSE_HEADERS,
             )
         try:
-            capture = get_capture_detail(capture_id)
-            _apply_organization_write(
-                capture=capture,
-                write_mode=write_mode,
-                output_path=output_path,
-                summary=summary,
-            )
-            update_capture_triage(
-                capture_id,
-                "processed",
-                expected_record_sha256,
-                summary,
-                output_paths=[output_path] if output_path.strip() else [],
-            )
+            with vault_core._mutation_lock(STATE_ROOT):
+                capture = get_capture_detail(capture_id)
+                _validate_organization_write_request(
+                    capture=capture,
+                    expected_record_sha256=expected_record_sha256,
+                    write_mode=write_mode,
+                )
+                _apply_organization_write(
+                    capture=capture,
+                    write_mode=write_mode,
+                    output_path=output_path,
+                    summary=summary,
+                )
+                update_capture_triage(
+                    capture_id,
+                    "processed",
+                    expected_record_sha256,
+                    summary,
+                    output_paths=[output_path] if output_path.strip() else [],
+                )
         except JarvisError as exc:
             try:
                 captures = cast(list[dict[str, object]], get_capture_listing("ready", 20)["captures"])
